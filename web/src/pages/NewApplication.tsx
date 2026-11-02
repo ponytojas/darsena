@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -12,7 +12,8 @@ import {
   Play,
 } from "lucide-react";
 import { api, type CreateInput, type Scenario } from "@/api/client";
-import { es as t } from "@/i18n/es";
+import { errorMessage } from "@/i18n/errors";
+import { useI18n } from "@/i18n/context";
 import { PageTitle } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,7 +45,8 @@ function restore(): CreateInput {
   }
   return initial;
 }
-export default function NewApplication() {
+export default function NewApplication({ lead }: { lead?: ReactNode }) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState<CreateInput>(restore);
   const [step, setStep] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -81,7 +83,7 @@ export default function NewApplication() {
         cache.invalidateQueries({ queryKey: ["applications"] }),
         cache.invalidateQueries({ queryKey: ["operations"] }),
       ]);
-      navigate(`/operations/${result.operation.id}`);
+      navigate(`/apps/example/${encodeURIComponent(result.operation.application_id)}/deployments/${result.operation.id}`);
     },
   });
   const update = <K extends keyof CreateInput>(
@@ -151,6 +153,7 @@ export default function NewApplication() {
   );
   return (
     <div className="page wizard-page">
+      {lead}
       <PageTitle
         eyebrow={t.applications}
         title={t.newApp}
@@ -173,7 +176,6 @@ export default function NewApplication() {
       <div className="wizard-layout">
         <form onSubmit={submit} noValidate>
           <div className="form-section">
-            <span className="section-number">0{step + 1}</span>
             <h2 tabIndex={-1} ref={titleRef}>
               {[t.originTitle, t.configureTitle, t.reviewTitle][step]}
             </h2>
@@ -266,7 +268,7 @@ export default function NewApplication() {
               <Alert variant="destructive">
                 <AlertCircle />
                 <AlertTitle>{t.unavailable}</AlertTitle>
-                <AlertDescription>{mutation.error.message}</AlertDescription>
+                <AlertDescription>{errorMessage(mutation.error, t)}</AlertDescription>
               </Alert>
             )}
           </div>
@@ -301,7 +303,6 @@ export default function NewApplication() {
           <span className="preview-icon">
             <Package />
           </span>
-          <p className="eyebrow">{t.application}</p>
           <h3>{draft.name || "mi-aplicacion"}</h3>
           <p className="preview-repo">{draft.repository}</p>
           <div className="preview-branch">
