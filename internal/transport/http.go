@@ -1,11 +1,13 @@
 package transport
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,9 +15,15 @@ import (
 	"time"
 
 	"github.com/ponytojas/darsena/internal/modules/demo"
+	"github.com/ponytojas/darsena/internal/platform/ownerauth"
 )
 
-type API struct{ Store *demo.Store }
+type API struct {
+	Store        *demo.Store
+	WorkerSocket string
+	Owner        *ownerauth.Manager
+	Installation string
+}
 
 func send(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -25,34 +33,121 @@ func send(w http.ResponseWriter, status int, value any) {
 func problem(w http.ResponseWriter, status int, message string) {
 	send(w, status, map[string]string{"error": message})
 }
+// problemCode adds a stable code so clients can translate the message.
+func problemCode(w http.ResponseWriter, status int, code, message string) {
+	send(w, status, map[string]string{"error": message, "code": code})
+}
 func read(w http.ResponseWriter, r *http.Request, v any) bool {
 	if r.Header.Get("Content-Type") != "application/json" {
-		problem(w, 415, "Se requiere Content-Type: application/json.")
+		problemCode(w, 415, "unsupported_media_type", "Se requiere Content-Type: application/json.")
 		return false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 8192)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
-		problem(w, 400, "JSON inválido o campos desconocidos.")
+		problemCode(w, 400, "invalid_json", "JSON inválido o campos desconocidos.")
 		return false
 	}
 	if err := d.Decode(&struct{}{}); err != io.EOF {
-		problem(w, 400, "La petición debe contener un único objeto JSON.")
+		problemCode(w, 400, "single_json_object", "La petición debe contener un único objeto JSON.")
 		return false
 	}
 	return true
 }
 func (a API) Handler(webDir string) http.Handler {
 	mux := http.NewServeMux()
+	if a.WorkerSocket != "" {
+		headerTimeout := 5 * time.Second
+		if a.Owner != nil {
+			headerTimeout = 90 * time.Second
+		}
+		proxy := &httputil.ReverseProxy{Director: func(r *http.Request) {
+			r.URL.Scheme = "http"
+			r.URL.Host = "worker"
+			r.Host = "worker"
+			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/api/v1/worker")
+			r.URL.RawPath = ""
+			r.Header.Del("Cookie")
+			r.Header.Del("Authorization")
+			r.Header.Del("X-Darsena-CSRF")
+			r.Header.Del("Origin")
+		}, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "unix", a.WorkerSocket)
+		}, ResponseHeaderTimeout: headerTimeout}, ModifyResponse: func(resp *http.Response) error { resp.Header.Del("Set-Cookie"); return linkWorkerResponse(resp) }, ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) { problem(w, 503, "Worker no disponible.") }}
+		mux.Handle("/api/v1/worker/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// A demo server must never forward real-service operations, even if
+			// inadvertently connected to an experimental worker.
+			for _, part := range strings.Split(r.URL.Path, "/") {
+				if part == "service" && a.Owner == nil {
+					problem(w, http.StatusForbidden, "Operación no disponible.")
+					return
+				}
+			}
+			if a.Owner != nil && !a.experimentalWorkerMatches(r.Context()) {
+				problem(w, http.StatusServiceUnavailable, "Worker experimental no disponible.")
+				return
+			}
+			if a.Owner != nil && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/service") && !a.experimentalRuntimeReady(r.Context()) {
+				problem(w, http.StatusServiceUnavailable, "Runtime no disponible.")
+				return
+			}
+			http.MaxBytesHandler(proxy, 100000).ServeHTTP(w, r)
+		}))
+	}
+	if a.Owner != nil {
+		mux.HandleFunc("POST /api/v1/auth/login", a.Owner.Login)
+		mux.Handle("POST /api/v1/auth/logout", a.Owner.Require(http.HandlerFunc(a.Owner.Logout)))
+	}
 	mux.HandleFunc("GET /api/v1/status", func(w http.ResponseWriter, r *http.Request) {
-		send(w, 200, map[string]any{"mode": "demo", "persistent": false})
+		mode := "demo"
+		if a.Owner != nil {
+			mode = "experimental"
+		}
+		send(w, 200, map[string]any{"mode": mode, "persistent": false, "worker_enabled": a.WorkerSocket != ""})
+	})
+	mux.HandleFunc("GET /api/v1/capabilities", a.capabilities)
+	mux.HandleFunc("GET /api/v1/health/live", func(w http.ResponseWriter, r *http.Request) {
+		send(w, http.StatusOK, map[string]string{"status": "alive"})
+	})
+	mux.HandleFunc("GET /api/v1/health/ready", func(w http.ResponseWriter, r *http.Request) {
+		workerStatus := "disabled"
+		status := http.StatusOK
+		if a.WorkerSocket != "" {
+			workerStatus = "unavailable"
+			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+			defer cancel()
+			transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", a.WorkerSocket)
+			}}
+			defer transport.CloseIdleConnections()
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://worker/readyz", nil)
+			resp, err := (&http.Client{Transport: transport}).Do(req)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					workerStatus = "ready"
+				}
+			}
+			if workerStatus != "ready" {
+				status = http.StatusServiceUnavailable
+			}
+		}
+		mode := "demo"
+		if a.Owner != nil {
+			mode = "experimental"
+			if !a.experimentalWorkerMatches(r.Context()) {
+				workerStatus = "unavailable"
+				status = http.StatusServiceUnavailable
+			}
+		}
+		send(w, status, map[string]string{"mode": mode, "worker": workerStatus})
 	})
 	mux.HandleFunc("GET /api/v1/applications", func(w http.ResponseWriter, r *http.Request) { send(w, 200, a.Store.Apps()) })
 	mux.HandleFunc("GET /api/v1/applications/{id}", func(w http.ResponseWriter, r *http.Request) {
 		app, ok := a.Store.App(r.PathValue("id"))
 		if !ok {
-			problem(w, 404, "Aplicación no encontrada.")
+			problemCode(w, 404, "application_not_found", "Aplicación no encontrada.")
 			return
 		}
 		send(w, 200, app)
@@ -64,7 +159,7 @@ func (a API) Handler(webDir string) http.Handler {
 		}
 		app, op, err := a.Store.Create(in)
 		if err != nil {
-			problem(w, 400, err.Error())
+			problemCode(w, 400, demo.ErrorCode(err), err.Error())
 			return
 		}
 		send(w, 202, map[string]any{"application": app, "operation": op})
@@ -77,12 +172,12 @@ func (a API) Handler(webDir string) http.Handler {
 			return
 		}
 		if _, ok := a.Store.App(r.PathValue("id")); !ok {
-			problem(w, 404, "Aplicación no encontrada.")
+			problemCode(w, 404, "application_not_found", "Aplicación no encontrada.")
 			return
 		}
 		op, err := a.Store.Deploy(r.PathValue("id"), in.Scenario)
 		if err != nil {
-			problem(w, 409, err.Error())
+			problemCode(w, 409, demo.ErrorCode(err), err.Error())
 			return
 		}
 		send(w, 202, op)
@@ -91,7 +186,7 @@ func (a API) Handler(webDir string) http.Handler {
 	mux.HandleFunc("GET /api/v1/operations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		op, ok := a.Store.Operation(r.PathValue("id"))
 		if !ok {
-			problem(w, 404, "Operación no encontrada.")
+			problemCode(w, 404, "operation_not_found", "Operación no encontrada.")
 			return
 		}
 		send(w, 200, op)
@@ -99,7 +194,11 @@ func (a API) Handler(webDir string) http.Handler {
 	mux.HandleFunc("GET /api/v1/operations/{id}/events", a.events)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { problem(w, 404, "Ruta API no encontrada.") })
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-        if r.Method != http.MethodGet && r.Method != http.MethodHead { w.Header().Set("Allow", "GET, HEAD"); http.Error(w, "Method not allowed", http.StatusMethodNotAllowed); return }
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		if webDir == "" {
 			http.Error(w, "Build the frontend or start Vite; see README.", 404)
 			return
@@ -111,7 +210,7 @@ func (a API) Handler(webDir string) http.Handler {
 		}
 		http.ServeFile(w, r, path)
 	})
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return logRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
@@ -131,13 +230,17 @@ func (a API) Handler(webDir string) http.Handler {
 				return
 			}
 		}
+		if a.Owner != nil && strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/v1/auth/login" && r.URL.Path != "/api/v1/capabilities" && r.URL.Path != "/api/v1/health/live" {
+			a.Owner.Require(mux).ServeHTTP(w, r)
+			return
+		}
 		mux.ServeHTTP(w, r)
-	})
+	}))
 }
 func (a API) events(w http.ResponseWriter, r *http.Request) {
 	op, ok := a.Store.Operation(r.PathValue("id"))
 	if !ok {
-		problem(w, 404, "Operación no encontrada.")
+		problemCode(w, 404, "operation_not_found", "Operación no encontrada.")
 		return
 	}
 	f, ok := w.(http.Flusher)

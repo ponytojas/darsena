@@ -1,0 +1,17 @@
+{
+  "Id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "Image":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "State":{"Status":"running","Running":true},
+  "Config":{"User":"65532:65532","Labels":{},"StopSignal":"SIGTERM","StopTimeout":10,"Healthcheck":{"Test":["NONE"]}},
+  "HostConfig":{
+    "Privileged":false,"AutoRemove":false,"PublishAllPorts":false,"OomKillDisable":null,"Cgroup":"",
+    "ReadonlyRootfs":true,"CapDrop":["ALL"],"CapAdd":null,"SecurityOpt":["no-new-privileges"],
+    "NetworkMode":"none","PidMode":"","IpcMode":"private","UTSMode":"","UsernsMode":"",
+    "CgroupnsMode":"private","CgroupParent":"","Memory":268435456,"MemorySwap":268435456,
+    "Runtime":"runc","GroupAdd":null,"NanoCpus":500000000,"PidsLimit":64,
+    "Devices":null,"DeviceRequests":null,"DeviceCgroupRules":null,"Binds":null,
+    "VolumesFrom":null,"VolumeDriver":"","PortBindings":null,
+    "RestartPolicy":{"Name":"no","MaximumRetryCount":0},"LogConfig":{"Type":"none","Config":{}}
+  },
+  "Mounts":[]
+}

@@ -77,3 +77,28 @@ func TestLoopback(t *testing.T) {
 		t.Fatal("loopback rejected")
 	}
 }
+func TestProblemCodes(t *testing.T) {
+	h := API{Store: demo.New(time.Second)}.Handler("")
+	for _, tc := range []struct {
+		name, method, path, body, code string
+		status                         int
+	}{
+		{"validation", "POST", "/api/v1/applications", `{"name":"X","repository":"a/b","branch":"main","context":".","port":3000,"scenario":"success"}`, "invalid_name", 400},
+		{"unknown field", "POST", "/api/v1/applications", `{"command":"rm"}`, "invalid_json", 400},
+		{"app missing", "GET", "/api/v1/applications/nope", "", "application_not_found", 404},
+		{"operation missing", "GET", "/api/v1/operations/nope", "", "operation_not_found", 404},
+		{"deploy missing", "POST", "/api/v1/applications/nope/deployments", `{"scenario":"success"}`, "application_not_found", 404},
+		{"bad scenario", "POST", "/api/v1/applications/bitacora/deployments", `{"scenario":"x"}`, "invalid_scenario", 409},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(tc.method, "http://localhost:7300"+tc.path, strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			var got struct{ Error, Code string }
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != tc.status || got.Code != tc.code || got.Error == "" {
+				t.Fatalf("%d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
