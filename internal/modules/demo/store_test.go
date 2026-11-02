@@ -95,3 +95,54 @@ func TestShutdownInterrupts(t *testing.T) {
 		t.Fatal(got.Status)
 	}
 }
+
+func TestLogSequenceRemainsMonotonicAfterBufferWrap(t *testing.T) {
+	o := Operation{}
+	for i := 0; i < 450; i++ {
+		logLine(&o, "line")
+	}
+	if len(o.Logs) != 200 {
+		t.Fatalf("got %d lines", len(o.Logs))
+	}
+	for i, line := range o.Logs {
+		if line.Sequence != i+251 {
+			t.Fatalf("line %d has sequence %d", i, line.Sequence)
+		}
+	}
+}
+func TestStableErrorCodesAndStepKeys(t *testing.T) {
+	s := New(time.Second)
+	bad := input("success")
+	bad.Name = "X"
+	if _, _, err := s.Create(bad); ErrorCode(err) != "invalid_name" {
+		t.Fatalf("%v", err)
+	}
+	a, o, _ := s.Create(input("build_failure"))
+	if _, _, err := s.Create(input("success")); ErrorCode(err) != "name_taken" {
+		t.Fatalf("%v", err)
+	}
+	if _, err := s.Deploy(a.ID, "success"); ErrorCode(err) != "deployment_in_progress" {
+		t.Fatalf("%v", err)
+	}
+	if _, err := s.Deploy("nope", "success"); ErrorCode(err) != "application_not_found" {
+		t.Fatalf("%v", err)
+	}
+	done := complete(s, o.ID)
+	if done.ErrorCode != "build_failed" || done.Steps[1].Key != "build" {
+		t.Fatalf("%+v", done)
+	}
+	for _, st := range done.Steps {
+		if st.Key == "" {
+			t.Fatalf("step without key: %+v", st)
+		}
+	}
+	_, o2, _ := s.Create(CreateInput{Name: "other-app", Repository: "demo/o", Branch: "main", Context: ".", Port: 3000, Scenario: "health_failure"})
+	if got := complete(s, o2.ID); got.ErrorCode != "health_check_failed" {
+		t.Fatalf("%+v", got)
+	}
+	_, o3, _ := s.Create(CreateInput{Name: "third-app", Repository: "demo/t", Branch: "main", Context: ".", Port: 3000, Scenario: "success"})
+	s.interrupt()
+	if got, _ := s.Operation(o3.ID); got.ErrorCode != "server_stopped" {
+		t.Fatalf("%+v", got)
+	}
+}
