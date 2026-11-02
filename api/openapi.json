@@ -3,7 +3,7 @@
   "info": {
     "title": "Dársena local demo API",
     "version": "0.1.0",
-    "description": "Volatile localhost-only demonstration. No infrastructure effects or authentication. Not a production API."
+    "description": "Local demonstration and explicitly configured experimental isolated services. Experimental routes require owner authentication. Not a production API."
   },
   "servers": [
     {
@@ -11,6 +11,91 @@
     }
   ],
   "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "getLiveness",
+        "responses": {
+          "200": {
+            "description": "The server process responds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "alive"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "getReadiness",
+        "responses": {
+          "200": {
+            "description": "The demo and its configured worker are available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "mode",
+                    "worker"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "demo"
+                      ]
+                    },
+                    "worker": {
+                      "type": "string",
+                      "enum": [
+                        "disabled",
+                        "ready",
+                        "unavailable"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configured worker is unavailable"
+          }
+        }
+      }
+    },
+    "/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "responses": {
+          "200": {
+            "description": "Current demo capabilities and bounded dependency availability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/status": {
       "get": {
         "operationId": "getStatus",
@@ -381,6 +466,1309 @@
           }
         }
       }
+    },
+    "/worker/jobs": {
+      "post": {
+        "operationId": "enqueueSimulatedWorkerJob",
+        "description": "Experimental local worker: simulations only. Requires serve --worker-socket. Independent of in-memory application demo.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Worker response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerJob"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listWorkerJobs",
+        "description": "List up to 100 latest persistent simulated worker jobs.",
+        "responses": {
+          "200": {
+            "description": "Jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkerJob"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Worker unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/jobs/{id}": {
+      "get": {
+        "operationId": "getWorkerJob",
+        "description": "Read a persistent simulated worker job.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worker response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerJob"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/config/{resource}": {
+      "get": {
+        "operationId": "getWorkerConfig",
+        "description": "Experimental; requires a worker with encrypted configuration enabled. Secrets are never returned.",
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/config/{resource}/history": {
+      "get": {
+        "operationId": "getWorkerConfigHistory",
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/config/{resource}/variables/{name}": {
+      "put": {
+        "operationId": "setWorkerConfigVariable",
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetConfigVariable"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWorkerConfigVariable",
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteConfigVariable"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/applications": {
+      "get": {
+        "operationId": "listWorkerApplications",
+        "description": "Persistent definitions; no deployment is performed.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkerApplication"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkerApplication",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerApplicationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerApplication"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/applications/{id}": {
+      "get": {
+        "operationId": "getWorkerApplication",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerApplication"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/health": {
+      "get": {
+        "operationId": "getWorkerHealth",
+        "responses": {
+          "200": {
+            "description": "Worker capabilities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerHealth"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/applications/{id}/service": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Read experimental isolated service state",
+        "responses": {
+          "200": {
+            "description": "Current persisted service operation state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "401": {
+            "description": "Owner session required"
+          },
+          "403": {
+            "description": "Session token required"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create an isolated service once; no network or public URL",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "revision",
+                  "acknowledge_no_network"
+                ],
+                "properties": {
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "acknowledge_no_network": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Current persisted service operation state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Current persisted service operation state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Current persisted service operation state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Owner session required"
+          },
+          "403": {
+            "description": "Origin or token rejected"
+          },
+          "409": {
+            "description": "Conflict; code revision_conflict_before_dispatch identifies a rejected stale revision, while other conflicts do not guarantee absence of an existing operation."
+          },
+          "503": {
+            "description": "Worker unavailable"
+          }
+        }
+      }
+    },
+    "/worker/applications/{id}/service/refresh": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Inspect an existing service without resending creation",
+        "responses": {
+          "200": {
+            "description": "Current persisted service operation state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "503": {
+            "description": "Worker unavailable"
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "summary": "Start a local owner session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "credential"
+                ],
+                "properties": {
+                  "credential": {
+                    "type": "string",
+                    "format": "password"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session cookie and in-memory token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "csrf"
+                  ],
+                  "properties": {
+                    "csrf": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credential"
+          },
+          "403": {
+            "description": "Origin rejected"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "summary": "Revoke the current owner session",
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "Origin or token rejected"
+          }
+        }
+      }
+    },
+    "/worker/applications/{id}/service/stop": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Stop an isolated service once; reconcile uncertain results before any further action",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Persisted service and action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Persisted service and action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "401": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "403": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "404": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "409": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "503": {
+            "description": "Request rejected or outcome unavailable"
+          }
+        }
+      }
+    },
+    "/worker/applications/{id}/service/remove": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Remove an isolated service once; reconcile uncertain results before any further action",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "acknowledge_remove"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 1
+                  },
+                  "acknowledge_remove": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Persisted service and action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Persisted service and action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "401": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "403": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "404": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "409": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "503": {
+            "description": "Request rejected or outcome unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -455,6 +1843,9 @@
           "message"
         ],
         "properties": {
+          "key": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
@@ -556,6 +1947,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "error_code": {
+            "type": "string"
           }
         }
       },
@@ -637,6 +2031,94 @@
         "properties": {
           "error": {
             "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "required": [
+          "mode",
+          "real_execution",
+          "worker",
+          "state",
+          "vault"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "demo",
+              "experimental"
+            ]
+          },
+          "real_execution": {
+            "type": "object",
+            "required": [
+              "enabled",
+              "provider",
+              "configuration"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "unavailable",
+                  "ready"
+                ]
+              },
+              "configuration": {
+                "type": "string",
+                "enum": [
+                  "not_applied",
+                  "accepted_revision"
+                ]
+              }
+            }
+          },
+          "worker": {
+            "type": "object",
+            "required": [
+              "configured",
+              "status"
+            ],
+            "properties": {
+              "configured": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "ready",
+                  "unavailable"
+                ]
+              }
+            }
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "ready",
+              "unavailable",
+              "unknown"
+            ]
+          },
+          "vault": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "ready",
+              "unavailable",
+              "unknown"
+            ]
           }
         }
       },
@@ -645,7 +2127,8 @@
         "additionalProperties": false,
         "required": [
           "mode",
-          "persistent"
+          "persistent",
+          "worker_enabled"
         ],
         "properties": {
           "mode": {
@@ -659,6 +2142,305 @@
             "enum": [
               false
             ]
+          },
+          "worker_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WorkerRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resource_id",
+          "idempotency_key"
+        ],
+        "properties": {
+          "resource_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      },
+      "WorkerJob": {
+        "type": "object",
+        "required": [
+          "id",
+          "resource_id",
+          "kind",
+          "status",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "simulation"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ConfigVariable": {
+        "type": "object",
+        "required": [
+          "name",
+          "secret"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "description": "Only included for non-secret values."
+          },
+          "secret": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConfigSnapshot": {
+        "type": "object",
+        "required": [
+          "revision",
+          "variables"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "variables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigVariable"
+            }
+          }
+        }
+      },
+      "SetConfigVariable": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "value",
+          "secret"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "value": {
+            "type": "string",
+            "description": "Value to store. Secret values are never returned."
+          },
+          "secret": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeleteConfigVariable": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "WorkerApplication": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "image",
+          "port",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorkerApplicationInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "image",
+          "port"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          }
+        }
+      },
+      "WorkerHealth": {
+        "type": "object",
+        "required": [
+          "mode",
+          "config_enabled"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "simulation"
+            ]
+          },
+          "config_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ExperimentalService": {
+        "type": "object",
+        "required": [
+          "application_id",
+          "operation_id",
+          "revision",
+          "phase",
+          "observation",
+          "version"
+        ],
+        "properties": {
+          "application_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "dispatched",
+              "observed"
+            ]
+          },
+          "observation": {
+            "type": "string",
+            "enum": [
+              "",
+              "absent",
+              "created",
+              "running",
+              "stopped",
+              "conflict",
+              "unavailable",
+              "unknown"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "action": {
+            "type": "object",
+            "required": [
+              "kind",
+              "phase",
+              "observation"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "stop",
+                  "remove",
+                  "unknown"
+                ]
+              },
+              "phase": {
+                "type": "string",
+                "enum": [
+                  "dispatched",
+                  "observed"
+                ]
+              },
+              "observation": {
+                "type": "string",
+                "enum": [
+                  "",
+                  "absent",
+                  "created",
+                  "running",
+                  "stopped",
+                  "conflict",
+                  "unavailable",
+                  "unknown"
+                ]
+              }
+            }
           }
         }
       }
