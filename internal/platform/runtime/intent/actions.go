@@ -22,10 +22,93 @@ func scanAction(row scanner) (Action, error) {
 	if err := row.Scan(&a.Kind, &a.Phase, &a.Observation, &a.Version); err != nil {
 		return Action{}, err
 	}
-	if (a.Kind != "stop" && a.Kind != "remove") || a.Version == 0 || a.Version > math.MaxInt64 || !((a.Phase == Dispatched && a.Observation == "") || (a.Phase == Observed && observationValid(a.Observation))) {
+	if !validAction(a) {
 		return Action{}, ErrUnavailable
 	}
 	return a, nil
+}
+func validAction(a Action) bool {
+	return (a.Kind == "stop" || a.Kind == "remove") && a.Version != 0 && a.Version <= math.MaxInt64 && ((a.Phase == Dispatched && a.Observation == "") || (a.Phase == Observed && observationValid(a.Observation)))
+}
+
+// ServiceSummary is the read-only state of one service. Invalid is set when its
+// intention row fails validation; Action is then nil. An invalid action row
+// yields Action{Kind:"unknown"}, exactly as the single-service view does.
+type ServiceSummary struct {
+	Intent  Intent
+	Action  *Action
+	Invalid bool
+}
+
+// ListServices reads the state of the given applications' services (one
+// operation of one installation) with exactly two queries, whatever their
+// number. Applications without an intention are absent from the result. Like
+// LastAction it prefers a remove action over a stop and validates the chosen
+// row. A failure of either query returns ErrUnavailable.
+func (s *Store) ListServices(ctx context.Context, installation, operation string, appIDs []string) (map[string]ServiceSummary, error) {
+	if !(rt.Identity{Installation: installation, Service: "probe", Operation: operation}).Valid() {
+		return nil, ErrInvalid
+	}
+	want := make(map[string]bool, len(appIDs))
+	for _, id := range appIDs {
+		want[id] = true
+	}
+	out := map[string]ServiceSummary{}
+	rows, e := s.db.QueryContext(ctx, `SELECT service,resource,fingerprint,image,revision,phase,observation,version FROM runtime_intents WHERE installation=? AND operation=?`, installation, operation)
+	if e != nil {
+		return nil, ErrUnavailable
+	}
+	for rows.Next() {
+		var service string
+		v := Intent{}
+		if e = rows.Scan(&service, &v.Ref.ResourceID, &v.Ref.Fingerprint, &v.Ref.Image, &v.Revision, &v.Phase, &v.Observation, &v.Version); e != nil {
+			_ = rows.Close()
+			return nil, ErrUnavailable
+		}
+		if !want[service] {
+			continue
+		}
+		v.Ref.Identity = rt.Identity{Installation: installation, Service: service, Operation: operation}
+		v.Ref.Revision = v.Revision
+		out[service] = ServiceSummary{Intent: v, Invalid: !v.Ref.Identity.Valid() || !validIntent(v)}
+	}
+	if e = rows.Err(); e != nil || rows.Close() != nil {
+		return nil, ErrUnavailable
+	}
+	rows, e = s.db.QueryContext(ctx, `SELECT service,kind,phase,observation,version FROM runtime_actions WHERE installation=? AND operation=?`, installation, operation)
+	if e != nil {
+		return nil, ErrUnavailable
+	}
+	chosen := map[string]Action{}
+	for rows.Next() {
+		var service string
+		var a Action
+		if e = rows.Scan(&service, &a.Kind, &a.Phase, &a.Observation, &a.Version); e != nil {
+			_ = rows.Close()
+			return nil, ErrUnavailable
+		}
+		if _, ok := out[service]; !ok {
+			continue
+		}
+		if prev, ok := chosen[service]; !ok || (a.Kind == "remove" && prev.Kind != "remove") {
+			chosen[service] = a
+		}
+	}
+	if e = rows.Err(); e != nil || rows.Close() != nil {
+		return nil, ErrUnavailable
+	}
+	for service, a := range chosen {
+		sum := out[service]
+		if sum.Invalid {
+			continue
+		}
+		if !validAction(a) {
+			a = Action{Kind: "unknown", Phase: Dispatched}
+		}
+		sum.Action = &a
+		out[service] = sum
+	}
+	return out, nil
 }
 
 // LastAction returns the most recent action in the one-stop, one-remove lifecycle.

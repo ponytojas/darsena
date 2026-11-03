@@ -25,6 +25,7 @@ type Application struct {
 	CreatedAt    time.Time `json:"created_at"`
 	OperationIDs []string  `json:"operation_ids"`
 }
+
 // Error is a demo failure with a stable, translatable code; Message is Spanish fallback text.
 type Error struct {
 	Code    string

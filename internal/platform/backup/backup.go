@@ -251,15 +251,25 @@ func checkSnapshot(ctx context.Context, p, role string) error {
 	var queries []string
 	switch role {
 	case "state.db":
-		if version != 2 {
+		if version != 2 && version != 3 {
 			return ErrIncomplete
 		}
-		queries = []string{"SELECT id,resource_id,kind,idempotency_key,status,error,created_at,updated_at FROM jobs LIMIT 0", "SELECT id,name,image,port,created_at FROM applications LIMIT 0"}
+		queries = []string{"SELECT id,resource_id,kind,idempotency_key,status,error,created_at,updated_at FROM jobs LIMIT 0"}
+		if version == 2 {
+			queries = append(queries, "SELECT id,name,image,port,created_at FROM applications LIMIT 0")
+		} else {
+			queries = append(queries, "SELECT id,name,image,port,created_at,project_id,version,updated_at,runtime_used FROM applications LIMIT 0", "SELECT id,name,name_key,color,version,created_at,updated_at FROM projects LIMIT 0")
+		}
 	case "vault.db":
-		if version != 0 {
+		if version != 0 && version != 1 {
 			return ErrIncomplete
 		}
-		queries = []string{"SELECT name,value FROM metadata LIMIT 0", "SELECT resource,revision,ciphertext FROM configurations LIMIT 0", "SELECT resource,revision,ciphertext FROM configuration_history LIMIT 0"}
+		queries = []string{"SELECT name,value FROM metadata LIMIT 0"}
+		if version == 0 {
+			queries = append(queries, "SELECT resource,revision,ciphertext FROM configurations LIMIT 0", "SELECT resource,revision,ciphertext FROM configuration_history LIMIT 0")
+		} else {
+			queries = append(queries, "SELECT resource,revision,ciphertext,updated_at FROM configurations LIMIT 0", "SELECT resource,revision,ciphertext,created_at FROM configuration_history LIMIT 0")
+		}
 		var n int
 		if db.QueryRowContext(ctx, "SELECT count(*) FROM metadata WHERE name='identity_check'").Scan(&n) != nil || n != 1 {
 			return ErrIncomplete

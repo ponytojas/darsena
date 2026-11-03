@@ -176,4 +176,9 @@ func TestExperimentalProxyRequiresAuthenticationAndMatchingWorker(t *testing.T) 
 	if wr.Code != 403 || calls.Load() != 3 {
 		t.Fatal("demo forwarded real operation")
 	}
+	wr = httptest.NewRecorder()
+	demo.ServeHTTP(wr, httptest.NewRequest("POST", "http://127.0.0.1:7300/api/v1/worker/image/pull", nil))
+	if wr.Code != 403 || calls.Load() != 3 {
+		t.Fatal("demo forwarded an image pull")
+	}
 }

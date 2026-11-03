@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ponytojas/darsena/internal/platform/configvault"
 	"github.com/ponytojas/darsena/internal/platform/jobs"
 	rt "github.com/ponytojas/darsena/internal/platform/runtime"
 	"github.com/ponytojas/darsena/internal/platform/runtime/execution"
@@ -22,15 +23,32 @@ type RuntimeProvider interface {
 	Stop(context.Context, rt.Ref) (rt.Result, error)
 	Remove(context.Context, rt.Ref) error
 	Check(context.Context) error
+	ImageProvider
 }
+
+// serviceOperation is the fixed operation of every application's service identity.
+const serviceOperation = "initial"
 
 type realRuntime struct {
 	installation string
 	store        *intent.Store
 	prepare      execution.PrepareRef
 	provider     RuntimeProvider
+	images       ImageProvider
+	pulls        *imagePulls
 	gate         chan struct{}
 }
+
+// tryAcquire takes the runtime gate without waiting; it reports false if busy.
+func (r *realRuntime) tryAcquire() bool {
+	select {
+	case r.gate <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+func (r *realRuntime) release() { <-r.gate }
 
 // EnableRuntime opts into experimental operations on the private worker socket.
 // The caller must validate and protect the socket and close the service. The
@@ -39,7 +57,7 @@ func (s *Service) EnableRuntime(installation string, store *intent.Store, prepar
 	if s == nil || s.vault == nil || s.runtime != nil || store == nil || prepare == nil || provider == nil || !(rt.Identity{Installation: installation, Service: "probe", Operation: "initial"}).Valid() {
 		return errors.New("invalid experimental runtime configuration")
 	}
-	s.runtime = &realRuntime{installation: installation, store: store, prepare: prepare, provider: provider, gate: make(chan struct{}, 1)}
+	s.runtime = &realRuntime{installation: installation, store: store, prepare: prepare, provider: provider, images: provider, pulls: newImagePulls(), gate: make(chan struct{}, 1)}
 	s.mux.HandleFunc("GET /runtime/info", func(w http.ResponseWriter, r *http.Request) {
 		send(w, http.StatusOK, map[string]string{"mode": "experimental", "installation": installation, "policy": "dockerlocal-v3"})
 	})
@@ -52,6 +70,7 @@ func (s *Service) EnableRuntime(installation string, store *intent.Store, prepar
 		}
 		send(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
+	s.mux.HandleFunc("POST /image/pull", s.pullImage)
 	s.mux.HandleFunc("POST /applications/{id}/service", s.createService)
 	s.mux.HandleFunc("GET /applications/{id}/service", s.getService)
 	s.mux.HandleFunc("POST /applications/{id}/service/refresh", s.refreshService)
@@ -90,7 +109,7 @@ func (s *Service) serviceIdentity(w http.ResponseWriter, r *http.Request) (rt.Id
 		failure(w, 500, "application unavailable")
 		return rt.Identity{}, false
 	}
-	id := rt.Identity{Installation: s.runtime.installation, Service: appID, Operation: "initial"}
+	id := rt.Identity{Installation: s.runtime.installation, Service: appID, Operation: serviceOperation}
 	if !id.Valid() {
 		failure(w, 500, "application unavailable")
 		return rt.Identity{}, false
@@ -105,13 +124,18 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	if !configBody(w, r, &input) {
 		return
 	}
-	if input.Revision == 0 || input.Revision > math.MaxInt64 || !input.AcknowledgeNoNetwork {
+	// Revision 0 means "no saved configuration": an empty first revision is
+	// saved before dispatching, so variables are not required.
+	if input.Revision > math.MaxInt64 || !input.AcknowledgeNoNetwork {
 		failure(w, 400, "revision and isolated network acknowledgement required")
 		return
 	}
 	id, ok := s.serviceIdentity(w, r)
 	if !ok {
 		return
+	}
+	if s.beforeGate != nil {
+		s.beforeGate()
 	}
 	select {
 	case s.runtime.gate <- struct{}{}:
@@ -121,20 +145,34 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	app, err := s.store.Application(r.Context(), id.Service)
+	if errors.Is(err, jobs.ErrNotFound) {
+		// Deleted between the identity check and the gate.
+		failureCode(w, 404, "application_not_found", "application not found")
+		return
+	}
 	if err != nil {
 		failure(w, 500, "application unavailable")
 		return
 	}
-	spec := rt.Spec{Identity: id, Image: app.Image, Revision: input.Revision}
+	// Definitions saved before images were normalized are canonicalized here.
+	image, err := rt.ParseImage(app.Image)
+	if err != nil || image.Digest == "" {
+		failureCode(w, 400, "invalid_image", "the saved image is not a valid reference pinned by digest")
+		return
+	}
+	spec := rt.Spec{Identity: id, Image: image.Pinned(), Revision: input.Revision}
+	if input.Revision == 0 {
+		spec.Revision = 1
+	}
 	if spec.Validate() != nil {
-		failure(w, 400, "application is incompatible with isolated runtime")
+		failureCode(w, 400, "invalid_image", "application is incompatible with isolated runtime")
 		return
 	}
 	// An already-dispatched request is an immutable operation, not a reason to
 	// re-read configuration or send a second create after a later edit.
 	existing, existingErr := s.runtime.store.Get(r.Context(), id)
 	if existingErr == nil {
-		if existing.Revision != input.Revision || existing.Ref.Image != app.Image {
+		if existing.Revision != input.Revision || existing.Ref.Image != spec.Image {
 			failure(w, 409, "operation or configuration conflicts")
 			return
 		}
@@ -145,6 +183,33 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	} else if !errors.Is(existingErr, intent.ErrNotFound) {
 		failure(w, 503, "operation unavailable")
 		return
+	}
+	// Before anything is persisted, the image must be present and usable:
+	// otherwise the single initial operation would be spent on a failure.
+	if !s.imageReady(w, r, spec.Image) {
+		return
+	}
+	if input.Revision == 0 {
+		if _, err := s.vault.Initialize(r.Context(), id.Service); errors.Is(err, configvault.ErrConflict) {
+			send(w, http.StatusConflict, map[string]string{"error": "configuration revision conflict", "code": "revision_conflict_before_dispatch"})
+			return
+		} else if err != nil {
+			failure(w, 503, "configuration unavailable")
+			return
+		}
+	}
+	// Persistent mark first: if it cannot be written nothing is dispatched.
+	// Deletion and image edits consult it even when this process later runs
+	// without the runtime. A request that then fails before dispatching leaves
+	// the mark set, which errs on the safe side.
+	if !app.ServiceUsed {
+		if err = s.store.MarkRuntimeUsed(r.Context(), app.ID); errors.Is(err, jobs.ErrNotFound) {
+			failureCode(w, 404, "application_not_found", "application not found")
+			return
+		} else if err != nil {
+			failure(w, 503, "operation unavailable")
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 75*time.Second)
 	defer cancel()
@@ -182,6 +247,24 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	}
 	send(w, http.StatusCreated, s.serviceView(r.Context(), result.Intent))
 }
+// imageReady writes a coded failure unless the pinned image is available.
+func (s *Service) imageReady(w http.ResponseWriter, r *http.Request, pinned string) bool {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	status, err := s.runtime.images.ImageStatus(ctx, pinned)
+	switch {
+	case err != nil:
+		failureCode(w, 503, "runtime_unavailable", "image availability could not be checked")
+	case status.State == rt.ImageMissing:
+		failureCode(w, 409, "image_missing", "the image is not present in the runtime; download it first")
+	case status.State != rt.ImageAvailable:
+		failureCode(w, 400, "image_incompatible", "the image cannot run in the isolated runtime")
+	default:
+		return true
+	}
+	return false
+}
+
 func (s *Service) getService(w http.ResponseWriter, r *http.Request) {
 	id, ok := s.serviceIdentity(w, r)
 	if !ok {
