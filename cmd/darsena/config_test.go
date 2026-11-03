@@ -228,3 +228,45 @@ func TestExperimentalModeRequiresExclusiveCompleteConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestAgeInitCreatesPrivateIdentityWithoutOverwriting(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "identity.age")
+	cfg, err := resolveConfig([]string{"age-init", "--age-identity", path}, env(nil))
+	if err != nil || cfg.command != "age-init" || cfg.identityFile != path {
+		t.Fatalf("resolve: %v", err)
+	}
+	if _, err := resolveConfig([]string{"age-init"}, env(nil)); err == nil {
+		t.Fatal("age-init without path accepted")
+	}
+	if err := generateIdentity(path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("identity mode: %v %v", info, err)
+	}
+	if _, err := readIdentity(path); err != nil {
+		t.Fatalf("generated identity unreadable: %v", err)
+	}
+	first, _ := os.ReadFile(path)
+	if err := generateIdentity(path); err == nil {
+		t.Fatal("overwrote identity")
+	}
+	if after, _ := os.ReadFile(path); string(after) != string(first) {
+		t.Fatal("identity changed")
+	}
+	shared := filepath.Join(dir, "shared")
+	if err := os.Mkdir(shared, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := generateIdentity(filepath.Join(shared, "identity.age")); err == nil || strings.Contains(err.Error(), "AGE-SECRET-KEY") {
+		t.Fatalf("created identity in a non-private directory: %v", err)
+	}
+}
