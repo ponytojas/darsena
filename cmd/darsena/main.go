@@ -37,7 +37,7 @@ func main() {
 func run() error {
 	cfg, err := resolveConfig(os.Args[1:], os.LookupEnv)
 	if errors.Is(err, flag.ErrHelp) {
-		fmt.Println("usage: darsena serve (--demo | --experimental) [options] | darsena worker (--demo | --experimental) [options] | darsena owner-init --owner-credential path")
+		fmt.Println("usage: darsena serve (--demo | --experimental) [options] | darsena worker (--demo | --experimental) [options] | darsena owner-init --owner-credential path | darsena age-init --age-identity path")
 		return nil
 	}
 	if err != nil {
@@ -45,6 +45,9 @@ func run() error {
 	}
 	if cfg.command == "owner-init" {
 		return ownerauth.Generate(cfg.ownerCredential)
+	}
+	if cfg.command == "age-init" {
+		return generateIdentity(cfg.identityFile)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

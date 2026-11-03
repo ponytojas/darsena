@@ -13,6 +13,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/ponytojas/darsena/internal/platform/ownerauth"
+	"github.com/ponytojas/darsena/internal/platform/privatefile"
 	rt "github.com/ponytojas/darsena/internal/platform/runtime"
 	"github.com/ponytojas/darsena/internal/transport"
 )
@@ -31,7 +32,7 @@ type config struct {
 // Error messages intentionally never contain supplied values.
 func resolveConfig(args []string, lookup func(string) (string, bool)) (config, error) {
 	var c config
-	if len(args) == 0 || (args[0] != "serve" && args[0] != "worker" && args[0] != "owner-init") {
+	if len(args) == 0 || (args[0] != "serve" && args[0] != "worker" && args[0] != "owner-init" && args[0] != "age-init") {
 		return c, errors.New("usage: darsena serve --demo | darsena worker --demo --state <path> --socket <path>")
 	}
 	c.command = args[0]
@@ -41,6 +42,13 @@ func resolveConfig(args []string, lookup func(string) (string, bool)) (config, e
 		fs.StringVar(&c.ownerCredential, "owner-credential", "", "new credential file")
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 || c.ownerCredential == "" {
 			return c, errors.New("owner-init requires --owner-credential")
+		}
+		return c, nil
+	}
+	if c.command == "age-init" {
+		fs.StringVar(&c.identityFile, "age-identity", "", "new identity file")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 || c.identityFile == "" {
+			return c, errors.New("age-init requires --age-identity")
 		}
 		return c, nil
 	}
@@ -155,6 +163,20 @@ func resolveConfig(args []string, lookup func(string) (string, bool)) (config, e
 	}
 	return c, nil
 }
+
+// generateIdentity writes a new age X25519 identity to a new private file.
+// It never prints the identity or overwrites an existing file.
+func generateIdentity(path string) error {
+	identity, err := age.GenerateX25519Identity()
+	if err != nil {
+		return errors.New("cannot generate age identity")
+	}
+	if privatefile.Create(path, []byte(identity.String()+"\n")) != nil {
+		return errors.New("cannot create age identity; the path must be new, absolute and in a private directory")
+	}
+	return nil
+}
+
 func readIdentity(path string) (*age.X25519Identity, error) {
 	info, err := os.Lstat(path)
 	if err != nil {

@@ -15,12 +15,12 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ponytojas/darsena/internal/platform/privatefile"
 	"golang.org/x/sys/unix"
 )
 
@@ -63,7 +63,7 @@ func New(path, origin string) (*Manager, error) {
 	if err != nil || portErr != nil || portNumber < 1 || portNumber > 65535 || (host != "localhost" && !isLoopback(host)) {
 		return nil, errConfiguration
 	}
-	if !privateAncestors(path) {
+	if !privatefile.SafeAncestors(path) {
 		return nil, errConfiguration
 	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
@@ -96,52 +96,14 @@ func New(path, origin string) (*Manager, error) {
 // Ancestor checks do not inspect ACLs and are not atomic against replacement.
 // It never returns or prints the credential or overwrites an existing file.
 func Generate(path string) error {
-	if !privateAncestors(path) {
-		return errConfiguration
-	}
 	credential, err := randomToken()
 	if err != nil {
 		return errConfiguration
 	}
-	fd, err := unix.Open(path, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
-	if err != nil {
-		return errConfiguration
-	}
-	f := os.NewFile(uintptr(fd), "credential")
-	_, writeErr := io.WriteString(f, credential+"\n")
-	syncErr := f.Sync()
-	closeErr := f.Close()
-	if writeErr != nil || syncErr != nil || closeErr != nil {
-		_ = os.Remove(path)
+	if privatefile.Create(path, []byte(credential+"\n")) != nil {
 		return errConfiguration
 	}
 	return nil
-}
-
-// privateAncestors fails closed for symlinks and writable ancestors, including
-// sticky directories. A root-owned ancestor may be traversed but not changed
-// by an unprivileged user. These checks do not establish ACL safety.
-func privateAncestors(path string) bool {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return false
-	}
-	dir := filepath.Dir(path)
-	first := true
-	for {
-		info, err := os.Lstat(dir)
-		if err != nil || !info.IsDir() || info.Mode().Perm()&0022 != 0 || (first && info.Mode().Perm()&0077 != 0) {
-			return false
-		}
-		var stat unix.Stat_t
-		if unix.Lstat(dir, &stat) != nil || (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) || (first && stat.Uid != uint32(os.Geteuid())) {
-			return false
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return true
-		}
-		dir, first = parent, false
-	}
 }
 
 func isLoopback(host string) bool {
