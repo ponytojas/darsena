@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/client";
+import { api, ApiError } from "@/api/client";
+import { imageInput } from "@/lib/image";
 import { isValidPort } from "./validation";
 
 type WorkerApplication = Awaited<ReturnType<typeof api.workerApps>>[number];
-type Base = { version: number; image: string; port: string };
-const snapshot = (app: WorkerApplication): Base => ({ version: app.version, image: app.image, port: String(app.port) });
+type Base = { version: number; image: string; saved: string; port: string };
+const snapshot = (app: WorkerApplication): Base => ({ version: app.version, image: imageInput(app.image), saved: app.image, port: String(app.port) });
 
 /** Draft of the image and port form. The version it was loaded at is kept so a concurrent change is reported, never overwritten. */
 export function useDefinitionSettings(app: WorkerApplication, enabled: boolean) {
@@ -29,7 +30,8 @@ export function useDefinitionSettings(app: WorkerApplication, enabled: boolean) 
 
   const save = useMutation({
     // The caller passes the canonical reference from the image check when known.
-    mutationFn: (resolved?: string) => api.workerAppUpdate(app.id, { version: base.version, image: resolved ?? image.trim(), port: Number(port) }),
+    // An untouched image is sent exactly as saved, so a moving tag never re-pins it.
+    mutationFn: (resolved?: string) => api.workerAppUpdate(app.id, { version: base.version, image: image === base.image ? base.saved : (resolved ?? image.trim()), port: Number(port) }),
     onSuccess: (updated) => {
       load(updated as WorkerApplication);
       void cache.invalidateQueries({ queryKey: ["worker-apps"] });
@@ -48,15 +50,28 @@ export function useDefinitionSettings(app: WorkerApplication, enabled: boolean) 
     onSettled: () => void cache.invalidateQueries({ queryKey: ["worker-apps"] }),
   });
   const remove = useMutation({
-    mutationFn: () => api.workerAppDelete(app.id),
+    // A service that still exists is stopped and its container removed first;
+    // the server deletes only once it confirms the container is gone.
+    mutationFn: async () => {
+      if (app.service_used) {
+        let service = await api.service(app.id).catch((error: unknown) => {
+          if (error instanceof ApiError && error.status === 404) return undefined;
+          throw error;
+        });
+        if (service?.observation === "running") service = await api.stopService(app.id, service.version);
+        if (service && (service.observation === "stopped" || service.observation === "created")) await api.removeService(app.id, service.version);
+      }
+      await api.workerAppDelete(app.id);
+    },
     onSuccess: () => {
       leaving.current = true;
       void cache.invalidateQueries({ queryKey: ["worker-apps"] });
     },
+    onError: () => void cache.invalidateQueries({ queryKey: ["isolated-service", app.id] }),
   });
 
   return {
-    image, port, shown, dirty, problems, projects, save, reload, assign, remove, leaving,
+    image, port, shown, dirty, problems, imageChanged: image !== base.image, projects, save, reload, assign, remove, leaving,
     setImage: (value: string) => { setImage(value); save.reset(); },
     setPort: (value: string) => { setPort(value); save.reset(); },
     showProblems: () => setShown(true),

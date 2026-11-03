@@ -47,8 +47,8 @@ test("owner creates one isolated service and can query an uncertain result", asy
   await page.getByLabel("Credencial del propietario").fill("test-only-credential");
   await page.getByRole("button", { name: "Iniciar sesión" }).click();
   await expect(page.getByText("Todavía no hay un servicio para esta aplicación.")).toBeVisible();
-  await page.getByLabel("Entiendo que el servicio no tendrá red ni URL pública.").check();
-  await page.getByRole("button", { name: "Crear servicio aislado" }).click();
+  await expect(page.getByText(/sin red ni URL pública/)).toBeVisible();
+  await page.getByRole("button", { name: "Desplegar", exact: true }).click();
   await expect(page.getByText("En ejecución", { exact: true })).toBeVisible();
   await expect(page.getByText(/No se ha podido confirmar el resultado/)).toHaveCount(0);
   await page.getByRole("button", { name: "Consultar estado" }).click();
@@ -61,33 +61,32 @@ test("owner creates one isolated service and can query an uncertain result", asy
   await expect(page.getByRole("heading", { name: "Acceso del propietario" })).toBeVisible();
 });
 
-test("revision conflict before dispatch permits a reviewed retry only after a fresh absence", async ({ page }) => {
+test("a revision conflict before dispatch explains itself and a retry uses the current revision", async ({ page }) => {
   let revision = 1;
   let creates = 0;
-  let lookups = 0;
   await page.route("**/api/v1/capabilities", route => route.fulfill({ json: { mode: "experimental", real_execution: { enabled: true, provider: "ready", configuration: "accepted_revision" }, worker: { configured: true, status: "ready" }, state: "ready", vault: "ready" } }));
   await page.route("**/api/v1/worker/projects", route => route.fulfill({ json: [] }));
   await page.route("**/api/v1/auth/login", route => route.fulfill({ json: { csrf: "session-token" } }));
-  await page.route("**/api/v1/worker/applications/app1/service", async route => {
-    if (route.request().method() === "GET") { lookups++; await route.fulfill({ status: 404, json: { error: "not found" } }); return; }
+  const running = { application_id: "app1", operation_id: "initial", revision: 2, phase: "observed", observation: "running", version: 3 };
+  await page.route("**/api/v1/worker/applications/app1/service**", async route => {
+    if (route.request().url().endsWith("/refresh")) return route.fulfill({ json: running });
+    if (route.request().method() === "GET") return creates < 2 ? route.fulfill({ status: 404, json: { error: "not found" } }) : route.fulfill({ json: running });
     creates++;
-    if (creates === 1) { revision = 2; await route.fulfill({ status: 409, json: { error: "configuration revision conflict", code: "revision_conflict_before_dispatch" } }); return; }
+    if (creates === 1) { revision = 2; return route.fulfill({ status: 409, json: { error: "configuration revision conflict", code: "revision_conflict_before_dispatch" } }); }
     expect(route.request().postDataJSON().revision).toBe(2);
-    await route.fulfill({ json: { application_id: "app1", operation_id: "initial", revision: 2, phase: "observed", observation: "running", version: 3 } });
+    return route.fulfill({ status: 201, json: running });
   });
   await page.route("**/api/v1/worker/applications", route => route.fulfill({ json: [{ id: "app1", name: "bitacora", image: `test@sha256:${"a".repeat(64)}`, port: 8080, created_at: "2026-01-01T00:00:00Z", ...summary }] }));
   await page.route("**/api/v1/worker/config/app1", route => route.fulfill({ json: { revision, variables: [] } }));
   await page.goto("/apps/definition/app1");
   await page.getByLabel("Credencial del propietario").fill("test-only-credential");
   await page.getByRole("button", { name: "Iniciar sesión" }).click();
-  await page.getByLabel("Entiendo que el servicio no tendrá red ni URL pública.").check();
-  await page.getByRole("button", { name: "Crear servicio aislado" }).click();
-  await expect(page.getByText(/La configuración cambió antes de enviar/)).toBeVisible();
-  await expect(page.getByText(/Revisión 2 ·/)).toBeVisible();
-  expect(lookups).toBeGreaterThanOrEqual(2);
-  await page.getByLabel("Entiendo que el servicio no tendrá red ni URL pública.").check();
-  await page.getByRole("button", { name: "Crear servicio aislado" }).click();
+  await page.getByRole("button", { name: "Desplegar", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "La configuración ha cambiado antes de enviar la operación" })).toBeVisible();
+  await expect(page.getByText(/No se ha podido confirmar el resultado/)).toHaveCount(0);
+  await page.getByRole("button", { name: "Reintentar" }).click();
   await expect.poll(() => creates).toBe(2);
+  await expect(page.getByRole("button", { name: "Parar servicio" })).toBeVisible();
 });
 
 test("stops and removes only after observed state, with confirmation", async ({ page }, info) => {
@@ -200,8 +199,9 @@ test("experimental creation opens the definition form directly and lands on the 
   const form = page.getByRole("region", { name: "Definición desde imagen" });
   await form.getByLabel("Nombre", { exact: true }).fill("X");
   await form.getByLabel("Imagen", { exact: true }).fill("sin-digest");
+  await form.getByText("Más opciones").click();
   await form.getByLabel("Puerto").fill("70000");
-  await form.getByRole("button", { name: "Guardar definición" }).click();
+  await form.getByRole("button", { name: "Guardar sin desplegar" }).click();
   await expect(form.getByText(/Usa de 2 a 40 caracteres/)).toBeVisible();
   await expect(form.getByText("No se encuentra esa imagen o etiqueta en un registro público.")).toBeVisible();
   await expect(form.getByText("Indica un puerto entre 1 y 65535.")).toBeVisible();
@@ -210,7 +210,7 @@ test("experimental creation opens the definition form directly and lands on the 
   await form.getByLabel("Nombre", { exact: true }).fill("nueva-app");
   await form.getByLabel("Imagen", { exact: true }).fill(`test@sha256:${"c".repeat(64)}`);
   await form.getByLabel("Puerto").fill("9000");
-  await form.getByRole("button", { name: "Guardar definición" }).click();
+  await form.getByRole("button", { name: "Guardar sin desplegar" }).click();
   await expect(page).toHaveURL(/\/apps\/definition\/app9$/);
   await expect(page.getByRole("heading", { name: "nueva-app" })).toBeVisible();
   expect(created).toEqual([{ name: "nueva-app", image: `test@sha256:${"c".repeat(64)}`, port: 9000 }]);
@@ -242,24 +242,34 @@ test("the list reads service state from the summary and never queries each servi
   expect(serviceGets).toEqual([]);
 });
 
-test("settings lock the image and block deleting once the application had a service", async ({ page }) => {
+test("settings lock the image, and deleting stops and removes the service first", async ({ page }) => {
   const image = `test@sha256:${"a".repeat(64)}`;
-  let writes = 0;
+  const calls: string[] = [];
+  const view = (observation: string, version: number) => ({ application_id: "app1", operation_id: "initial", revision: 1, phase: "observed", observation, version });
   await page.route("**/api/v1/capabilities", route => route.fulfill({ json: { mode: "experimental", real_execution: { enabled: true, provider: "ready", configuration: "accepted_revision" }, worker: { configured: true, status: "ready" }, state: "ready", vault: "ready" } }));
   await page.route("**/api/v1/auth/login", route => route.fulfill({ json: { csrf: "session-token" } }));
-  await page.route("**/api/v1/worker/applications/app1/service**", route => route.fulfill({ status: 404, json: { error: "not found" } }));
+  await page.route("**/api/v1/worker/applications/app1/service**", route => {
+    const url = route.request().url();
+    if (url.endsWith("/stop")) { calls.push("stop"); expect(route.request().postDataJSON()).toEqual({ version: 1 }); return route.fulfill({ json: view("stopped", 2) }); }
+    if (url.endsWith("/remove")) { calls.push("remove"); expect(route.request().postDataJSON()).toMatchObject({ version: 2 }); return route.fulfill({ json: view("absent", 3) }); }
+    return route.fulfill({ json: view("running", 1) });
+  });
   await page.route("**/api/v1/worker/config/app1", route => route.fulfill({ json: { revision: 1, variables: [] } }));
   await page.route("**/api/v1/worker/projects", route => route.fulfill({ json: [] }));
   await page.route("**/api/v1/worker/applications", route => route.fulfill({ json: [{ id: "app1", name: "bitacora", image, port: 8080, created_at: "2026-01-01T00:00:00Z", ...summary, service_used: true }] }));
-  await page.route("**/api/v1/worker/applications/app1", route => { if (route.request().method() !== "GET") writes++; return route.fulfill({ status: 404, json: { error: "x" } }); });
+  await page.route("**/api/v1/worker/applications/app1", route => { if (route.request().method() === "DELETE") { calls.push("delete"); return route.fulfill({ status: 204, body: "" }); } return route.fulfill({ status: 404, json: { error: "x" } }); });
   await page.goto("/apps/definition/app1/settings");
   await page.getByLabel("Credencial del propietario").fill("test-only-credential");
   await page.getByRole("button", { name: "Iniciar sesión" }).click();
   await expect(page.getByLabel("Imagen", { exact: true })).toBeDisabled();
   await expect(page.getByText(/La recreación del servicio aún no está disponible/).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Eliminar definición" })).toBeDisabled();
-  await expect(page.getByText("No se puede eliminar porque la aplicación tiene o ha tenido un servicio.")).toBeVisible();
-  expect(writes).toBe(0);
+  await page.getByRole("button", { name: "Eliminar definición" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText(/se parará y se eliminará su contenedor/)).toBeVisible();
+  await dialog.getByLabel(/Escribe «bitacora»/).fill("bitacora");
+  await dialog.getByRole("button", { name: "Eliminar definición" }).click();
+  await expect(page).toHaveURL(/\/$/);
+  expect(calls).toEqual(["stop", "remove", "delete"]);
 });
 
 async function mockExperimental(page: Page, apps: unknown[]) {
@@ -297,7 +307,7 @@ test("settings show translated messages when the server refuses an image change 
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel(/Escribe «bitacora»/).fill("bitacora");
   await dialog.getByRole("button", { name: "Eliminar definición" }).click();
-  await expect(dialog.getByRole("alert")).toContainText("Esta aplicación tiene o ha tenido un servicio y no se puede eliminar.");
+  await expect(dialog.getByRole("alert")).toContainText("El servicio de esta aplicación sigue existiendo.");
 
   deleteCode = "runtime_busy";
   await dialog.getByRole("button", { name: "Eliminar definición" }).click();
@@ -332,91 +342,116 @@ test("a failed project assignment after creating warns that the definition has n
   await signIn(page);
   await page.getByLabel("Nombre", { exact: true }).fill("nueva-app");
   await page.getByLabel("Imagen", { exact: true }).fill(`test@sha256:${"c".repeat(64)}`);
-  await page.getByRole("button", { name: "Guardar definición" }).click();
+  await page.getByRole("button", { name: "Guardar sin desplegar" }).click();
   await expect(page).toHaveURL(/\/apps\/definition\/app9$/);
   await expect(page.getByText(/La definición se ha creado sin proyecto/)).toBeVisible();
 });
 
-test("the image field resolves a tag, offers an explicit download and follows it until available", async ({ page }) => {
-  const pinned = `docker.io/library/nginx@sha256:${"d".repeat(64)}`;
-  let status = "missing";
-  const pulls: unknown[] = [];
-  const created: { image?: string }[] = [];
+test("Deploy from the form resolves the tag, downloads, creates the project and variables, and starts", async ({ page }) => {
+  const canonical = `docker.io/library/nginx:1.27@sha256:${"d".repeat(64)}`;
+  let downloaded = false;
+  const calls: string[] = [];
+  const bodies: Record<string, unknown> = {};
+  let revision = 0;
   await mockExperimental(page, []);
   await page.route(/\/api\/v1\/worker\/image\?/, route => {
     const ref = new URL(route.request().url()).searchParams.get("ref");
-    if (ref !== "nginx:1.27" && ref !== pinned) return route.fulfill({ status: 404, json: { error: "x", code: "image_not_found" } });
-    const reply = { reference: pinned, ...(ref === pinned ? {} : { resolved_from: "docker.io/library/nginx:1.27" }), status, platform: "linux/arm64", daemon_platform: "linux/arm64" };
-    if (status === "pulling") status = "available";
-    return route.fulfill({ json: reply });
+    if (ref !== "nginx:1.27" && ref !== canonical) return route.fulfill({ status: 404, json: { error: "x", code: "image_not_found" } });
+    return route.fulfill({ json: { reference: canonical, resolved_from: "docker.io/library/nginx:1.27", status: downloaded ? "available" : "missing", platform: "linux/arm64", daemon_platform: "linux/arm64" } });
   });
-  await page.route("**/api/v1/worker/image/pull", route => {
-    pulls.push(route.request().postDataJSON());
-    status = "pulling";
-    return route.fulfill({ status: 202, json: { reference: pinned, status: "pulling" } });
+  await page.route("**/api/v1/worker/image/pull", route => { calls.push("pull"); bodies.pull = route.request().postDataJSON(); downloaded = true; return route.fulfill({ status: 202, json: { reference: canonical, status: "pulling" } }); });
+  await page.route("**/api/v1/worker/projects", route => {
+    if (route.request().method() !== "POST") return route.fulfill({ json: [] });
+    calls.push("project"); bodies.project = route.request().postDataJSON();
+    return route.fulfill({ status: 201, json: { id: "p9", name: "Web", color: "blue", version: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" } });
   });
   await page.route("**/api/v1/worker/applications", route => {
     if (route.request().method() !== "POST") return route.fulfill({ json: [] });
-    created.push(route.request().postDataJSON());
-    return route.fulfill({ status: 201, json: { ...lockedApp(), id: "app9", name: "web", image: pinned } });
+    calls.push("save"); bodies.save = route.request().postDataJSON();
+    return route.fulfill({ status: 201, json: { ...lockedApp(), id: "app9", name: "web", image: canonical } });
   });
-  await page.route("**/api/v1/worker/applications/app9", route => route.fulfill({ json: { ...lockedApp(), id: "app9", name: "web", image: pinned } }));
-  await page.route("**/api/v1/worker/config/app9", route => route.fulfill({ json: { revision: 0, variables: [] } }));
+  await page.route("**/api/v1/worker/applications/assign", route => { calls.push("assign"); return route.fulfill({ json: { assigned: 1 } }); });
+  await page.route("**/api/v1/worker/config/app9/variables/*", route => { calls.push("variable"); bodies.variable = route.request().postDataJSON(); revision++; return route.fulfill({ json: { revision, variables: [] } }); });
+  await page.route("**/api/v1/worker/config/app9", route => route.fulfill({ json: { revision, variables: [] } }));
+  const running = { application_id: "app9", operation_id: "initial", revision: 1, phase: "observed", observation: "running", version: 1 };
+  await page.route("**/api/v1/worker/applications/app9/service**", route => {
+    if (route.request().url().endsWith("/refresh")) return route.fulfill({ json: running });
+    if (route.request().method() === "POST") { calls.push("service"); bodies.service = route.request().postDataJSON(); return route.fulfill({ status: 201, json: running }); }
+    return route.fulfill({ json: running });
+  });
   await page.goto("/apps/new?kind=definition");
   await signIn(page);
   await page.getByLabel("Nombre", { exact: true }).fill("web");
-  const field = page.getByLabel("Imagen", { exact: true });
-  await field.fill("nginx:1.27");
-  await expect(page.getByText(/nginx:1\.27 apunta ahora a este digest/)).toBeVisible();
-  await expect(page.getByText(pinned)).toBeVisible();
-  await expect(page.getByText("Aún no está descargada en el runtime.")).toBeVisible();
+  await page.getByLabel("Imagen", { exact: true }).fill("nginx:1.27");
+  await expect(page.getByText("Se descargará al desplegar.")).toBeVisible();
+  await expect(page.getByText(/dddddddd/)).toHaveCount(0);
+  await page.getByLabel("Proyecto", { exact: true }).selectOption({ label: "+ Nuevo proyecto…" });
+  await expect(page.getByLabel("Nombre del nuevo proyecto")).toBeFocused();
+  await page.getByLabel("Nombre del nuevo proyecto").fill("Web");
+  await page.getByRole("button", { name: "Añadir variable" }).click();
+  await expect(page.getByLabel("Nombre 1")).toBeFocused();
+  await page.getByLabel("Nombre 1").fill("TOKEN");
+  await page.getByLabel(/^Valor/).fill("x");
   expect(await violations(page)).toEqual([]);
-  await page.getByRole("button", { name: "Descargar imagen" }).click();
-  await expect(page.getByText("Descargada en el runtime (linux/arm64).")).toBeVisible();
-  expect(pulls).toEqual([{ reference: pinned }]);
-  await page.getByRole("button", { name: "Guardar definición" }).click();
-  await expect(page).toHaveURL(/\/apps\/definition\/app9$/);
-  // What is saved is the pinned digest, never the moving tag.
-  expect(created[0].image).toBe(pinned);
+  await page.getByRole("button", { name: "Desplegar", exact: true }).click();
+  await expect(page).toHaveURL(/\/apps\/definition\/app9$/, { timeout: 15_000 });
+  expect(calls).toEqual(["pull", "project", "save", "assign", "variable", "service"]);
+  expect(bodies.pull).toEqual({ reference: canonical });
+  expect(bodies.project).toMatchObject({ name: "Web" });
+  expect(bodies.save).toEqual({ name: "web", image: canonical, port: 8080 });
+  expect(bodies.variable).toEqual({ revision: 0, value: "x", secret: true });
+  expect(bodies.service).toEqual({ revision: 1, acknowledge_no_network: true });
 });
 
-test("a service is created without variables, and a rejection before dispatch is not uncertain", async ({ page }) => {
-  const bodies: unknown[] = [];
+test("a rejection before dispatch from Deploy is not uncertain and can be retried", async ({ page }) => {
   let reply: { status: number; json: unknown } = { status: 409, json: { error: "missing", code: "image_missing" } };
   let exists = false;
+  const bodies: unknown[] = [];
   await mockExperimental(page, [lockedApp()]);
   await page.route("**/api/v1/worker/config/app1", route => route.fulfill({ json: { revision: exists ? 1 : 0, variables: [] } }));
-  await page.route("**/api/v1/worker/applications/app1/service**", async route => {
+  const running = { application_id: "app1", operation_id: "initial", revision: 1, phase: "observed", observation: "running", version: 1 };
+  await page.route("**/api/v1/worker/applications/app1/service**", route => {
+    if (route.request().url().endsWith("/refresh")) return route.fulfill({ json: running });
     if (route.request().method() === "POST") {
       bodies.push(route.request().postDataJSON());
       if (reply.status < 300) exists = true;
       return route.fulfill(reply);
     }
-    return exists
-      ? route.fulfill({ json: { application_id: "app1", operation_id: "initial", revision: 1, phase: "observed", observation: "running", version: 1 } })
-      : route.fulfill({ status: 404, json: { error: "not found" } });
+    return exists ? route.fulfill({ json: running }) : route.fulfill({ status: 404, json: { error: "not found" } });
   });
   await page.goto("/apps/definition/app1");
   await signIn(page);
-  await expect(page.getByText("Sin variables: se guardará una configuración vacía como revisión 1.")).toBeVisible();
-  await page.getByLabel("Entiendo que el servicio no tendrá red ni URL pública.").check();
-  await page.getByRole("button", { name: "Crear servicio aislado" }).click();
+  await expect(page.getByText(/Sin variables: se guardará una configuración vacía/)).toBeVisible();
+  await page.getByRole("button", { name: "Desplegar", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "La imagen no está descargada en el runtime" })).toBeVisible();
   await expect(page.getByText(/No se ha podido confirmar el resultado/)).toHaveCount(0);
   expect(bodies).toEqual([{ revision: 0, acknowledge_no_network: true }]);
-  reply = { status: 201, json: { application_id: "app1", operation_id: "initial", revision: 1, phase: "observed", observation: "running", version: 1 } };
-  await page.getByLabel("Entiendo que el servicio no tendrá red ni URL pública.").check();
-  await page.getByRole("button", { name: "Crear servicio aislado" }).click();
+  reply = { status: 201, json: running };
+  await page.getByRole("button", { name: "Reintentar" }).click();
   await expect(page.getByRole("button", { name: "Parar servicio" })).toBeVisible();
 });
 
-test("the next step asks to download a missing image before offering creation", async ({ page }) => {
+test("an incompatible image offers changing it instead of deploying", async ({ page }) => {
   await mockExperimental(page, [lockedApp()]);
-  await page.route(/\/api\/v1\/worker\/image\?/, route => route.fulfill({ json: { reference: lockedApp().image, status: "missing", daemon_platform: "linux/arm64" } }));
+  await page.route(/\/api\/v1\/worker\/image\?/, route => route.fulfill({ json: { reference: lockedApp().image, status: "incompatible", reason: "platform", platform: "windows/amd64", daemon_platform: "linux/arm64" } }));
   await page.route("**/api/v1/worker/config/app1", route => route.fulfill({ json: { revision: 1, variables: [] } }));
   await page.goto("/apps/definition/app1");
   await signIn(page);
-  await expect(page.getByText("Antes de crear el servicio, la imagen tiene que estar descargada en el runtime.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Descargar imagen" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Crear servicio aislado" })).toHaveCount(0);
+  await expect(page.getByText("Esta imagen es para windows/amd64 y el runtime usa linux/arm64: no podrá ejecutarse.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cambiar imagen" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Desplegar", exact: true })).toHaveCount(0);
+});
+
+test("a service that ends by itself reads as exited, with its exit code", async ({ page }) => {
+  await mockExperimental(page, [{ ...lockedApp(), service_used: true }]);
+  await page.route("**/api/v1/worker/config/app1", route => route.fulfill({ json: { revision: 1, variables: [] } }));
+  await page.route("**/api/v1/worker/applications/app1/service**", route => route.request().url().endsWith("/refresh")
+    ? route.fulfill({ json: { application_id: "app1", operation_id: "initial", revision: 1, phase: "observed", observation: "stopped", version: 2, exit_code: 3 } })
+    : route.fulfill({ json: { application_id: "app1", operation_id: "initial", revision: 1, phase: "observed", observation: "running", version: 1 } }));
+  await page.goto("/apps/definition/app1");
+  await signIn(page);
+  await expect(page.getByRole("button", { name: "Parar servicio" })).toBeVisible();
+  await page.getByRole("button", { name: "Consultar estado" }).click();
+  await expect(page.getByText("El proceso terminó con código 3.")).toBeVisible();
+  await expect(page.getByText("Terminado", { exact: true })).toBeVisible();
 });

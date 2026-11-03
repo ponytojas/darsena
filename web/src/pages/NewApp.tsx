@@ -27,7 +27,7 @@ export default function NewApp() {
   if (!demo)
     return (
       <div className="page">
-        <PageTitle title={t.newApp} description={t.definitions.newDescription} />
+        <PageTitle title={t.newApp} description={t.definitions.deploy.pageDescription} />
         <NewDefinition />
       </div>
     );
