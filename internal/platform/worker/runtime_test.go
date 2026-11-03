@@ -3,6 +3,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -32,9 +34,56 @@ type testProvider struct {
 	stopLost   bool
 	removeLost bool
 	checkErr   error
+	// image is the availability ImageStatus reports; empty means available.
+	imageMu  sync.Mutex
+	image    rt.ImageState
+	imageErr error
+	pullErr  error
+	pulls    atomic.Int32
+	pullGate chan struct{}
 }
 
 func (p *testProvider) Check(context.Context) error { return p.checkErr }
+func (p *testProvider) ImageStatus(ctx context.Context, pinned string) (rt.ImageStatus, error) {
+	if p.imageErr != nil {
+		return rt.ImageStatus{}, p.imageErr
+	}
+	p.imageMu.Lock()
+	state := p.image
+	p.imageMu.Unlock()
+	if state == "" {
+		state = rt.ImageAvailable
+	}
+	out := rt.ImageStatus{State: state, DaemonPlatform: "linux/arm64"}
+	if state == rt.ImageIncompatible {
+		out.Reason, out.Platform = "platform", "windows/amd64"
+	}
+	return out, nil
+}
+func (p *testProvider) ResolveTag(ctx context.Context, tagged string) (string, error) {
+	if strings.Contains(tagged, "private") {
+		return "", rt.ErrNotFound
+	}
+	return "sha256:" + strings.Repeat("d", 64), nil
+}
+func (p *testProvider) RegistrySupports(ctx context.Context, pinned string) (bool, string, error) {
+	if strings.Contains(pinned, "nanoserver") {
+		return false, "windows/amd64", nil
+	}
+	return true, "linux/arm64", nil
+}
+func (p *testProvider) Pull(ctx context.Context, pinned string) error {
+	p.pulls.Add(1)
+	if p.pullGate != nil {
+		<-p.pullGate
+	}
+	if p.pullErr == nil {
+		p.imageMu.Lock()
+		p.image = rt.ImageAvailable
+		p.imageMu.Unlock()
+	}
+	return p.pullErr
+}
 
 func (p *testProvider) Stop(ctx context.Context, r rt.Ref) (rt.Result, error) {
 	p.stops.Add(1)
@@ -275,4 +324,326 @@ func TestExperimentalRuntimeDisabled(t *testing.T) {
 		t.Fatal(errors.New("runtime unexpectedly enabled"))
 	}
 	_ = fmt.Sprint(rec.Code)
+}
+
+func TestRuntimeGuardsApplicationEditAndDelete(t *testing.T) {
+	ctx := context.Background()
+	dir, err := os.MkdirTemp("/tmp", "darsena-guard-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	s, err := Open(ctx, filepath.Join(dir, "state.db"), filepath.Join(dir, "socket"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	key, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault, err := configvault.Open(ctx, filepath.Join(dir, "vault.db"), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.EnableConfig(vault); err != nil {
+		t.Fatal(err)
+	}
+	store, err := intent.Open(ctx, filepath.Join(dir, "intent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.EnableRuntime("install", store, dockerlocal.PrepareRef, &testProvider{}); err != nil {
+		t.Fatal(err)
+	}
+	image := func(c string) string { return "example.com/image@sha256:" + strings.Repeat(c, 64) }
+	plain, err := s.store.CreateApplication(ctx, "plain-app", image("a"), 3000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	used, err := s.store.CreateApplication(ctx, "used-app", image("a"), 3000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = vault.Set(ctx, used.ID, 0, "A", "v", false); err != nil {
+		t.Fatal(err)
+	}
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec
+	}
+	expect := func(rec *httptest.ResponseRecorder, status int, code string) {
+		t.Helper()
+		if rec.Code != status || (code != "" && !strings.Contains(rec.Body.String(), `"code":"`+code+`"`)) {
+			t.Fatalf("want %d %s, got %d %s", status, code, rec.Code, rec.Body)
+		}
+	}
+	expect(request("POST", "/applications/"+used.ID+"/service", `{"revision":1,"acknowledge_no_network":true}`), 202, "")
+
+	// An intention locks the image but not the port.
+	expect(request("PATCH", "/applications/"+used.ID, `{"version":1,"image":"`+image("b")+`","port":3000}`), 409, "image_locked")
+	expect(request("PATCH", "/applications/"+used.ID, `{"version":1,"image":"`+image("a")+`","port":4000}`), 200, "")
+	expect(request("DELETE", "/applications/"+used.ID, ""), 409, "application_has_service")
+	if _, err = s.store.Application(ctx, used.ID); err != nil {
+		t.Fatal(err)
+	}
+	if snap, err := vault.Get(ctx, used.ID); err != nil || snap.Revision != 1 {
+		t.Fatal("configuration of a deployed application was touched", snap, err)
+	}
+
+	// A busy gate is reported, never waited for.
+	if !s.runtime.tryAcquire() {
+		t.Fatal("gate unexpectedly busy")
+	}
+	expect(request("DELETE", "/applications/"+plain.ID, ""), 409, "runtime_busy")
+	expect(request("PATCH", "/applications/"+plain.ID, `{"version":1,"image":"`+image("b")+`","port":3000}`), 409, "runtime_busy")
+	expect(request("PATCH", "/applications/"+plain.ID, `{"version":1,"image":"`+image("a")+`","port":3001}`), 200, "")
+	s.runtime.release()
+
+	// Without an intention the image is editable and the definition deletable.
+	expect(request("PATCH", "/applications/"+plain.ID, `{"version":2,"image":"`+image("b")+`","port":3001}`), 200, "")
+	expect(request("DELETE", "/applications/"+plain.ID, ""), 204, "")
+	if !s.runtime.tryAcquire() {
+		t.Fatal("gate leaked")
+	}
+	s.runtime.release()
+}
+
+func TestCreateServiceMarksApplicationAndHandlesDeletion(t *testing.T) {
+	ctx := context.Background()
+	dir, err := os.MkdirTemp("/tmp", "darsena-mark-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	s, err := Open(ctx, filepath.Join(dir, "state.db"), filepath.Join(dir, "socket"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault, err := configvault.Open(ctx, filepath.Join(dir, "vault.db"), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.EnableConfig(vault); err != nil {
+		t.Fatal(err)
+	}
+	store, err := intent.Open(ctx, filepath.Join(dir, "intent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.EnableRuntime("install", store, dockerlocal.PrepareRef, &testProvider{}); err != nil {
+		t.Fatal(err)
+	}
+	image := "example.com/image@sha256:" + strings.Repeat("a", 64)
+	request := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec
+	}
+	app, err := s.store.CreateApplication(ctx, "marked-app", image, 3000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, err := s.store.CreateApplication(ctx, "gone-app", image, 3000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range []string{app.ID, gone.ID} {
+		if _, err = vault.Set(ctx, a, 0, "A", "v", false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, _ := s.store.Application(ctx, app.ID); got.ServiceUsed {
+		t.Fatal("fresh application marked")
+	}
+	if rec := request("POST", "/applications/"+app.ID+"/service", `{"revision":1,"acknowledge_no_network":true}`); rec.Code != 202 {
+		t.Fatal(rec.Code, rec.Body)
+	}
+	if got, _ := s.store.Application(ctx, app.ID); !got.ServiceUsed {
+		t.Fatal("create did not mark the application")
+	}
+	if rec := request("GET", "/applications/"+app.ID, ""); !strings.Contains(rec.Body.String(), `"service_used":true`) {
+		t.Fatal(rec.Body)
+	}
+
+	// Deleted between the identity check and the gate: 404, not 500.
+	s.beforeGate = func() { _ = s.store.DeleteApplication(ctx, gone.ID) }
+	rec := request("POST", "/applications/"+gone.ID+"/service", `{"revision":1,"acknowledge_no_network":true}`)
+	s.beforeGate = nil
+	if rec.Code != 404 || !strings.Contains(rec.Body.String(), `"code":"application_not_found"`) {
+		t.Fatal(rec.Code, rec.Body)
+	}
+	if !s.runtime.tryAcquire() {
+		t.Fatal("gate leaked")
+	}
+	s.runtime.release()
+
+	// A worker without the runtime (demo) on the same state still refuses.
+	demo, err := Open(ctx, filepath.Join(dir, "other.db"), filepath.Join(dir, "socket2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer demo.Close()
+	marked, err := demo.store.CreateApplication(ctx, "demo-marked", image, 3000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = demo.store.MarkRuntimeUsed(ctx, marked.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ method, body string }{{"DELETE", ""}, {"PATCH", `{"version":1,"image":"example.com/image@sha256:` + strings.Repeat("b", 64) + `","port":3000}`}} {
+		req := httptest.NewRequest(c.method, "/applications/"+marked.ID, bytes.NewBufferString(c.body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		demo.mux.ServeHTTP(rec, req)
+		want := "application_has_service"
+		if c.method == "PATCH" {
+			want = "image_locked"
+		}
+		if rec.Code != 409 || !strings.Contains(rec.Body.String(), want) {
+			t.Fatal(c.method, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestApplicationSummary(t *testing.T) {
+	ctx := context.Background()
+	dir, err := os.MkdirTemp("/tmp", "darsena-sum-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	s, err := Open(ctx, filepath.Join(dir, "state.db"), filepath.Join(dir, "socket"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	get := func(path string) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if strings.Contains(rec.Body.String(), "sensitive-marker") {
+			t.Fatal("secret disclosed")
+		}
+		return rec
+	}
+	image := "example.com/image@sha256:" + strings.Repeat("a", 64)
+	a, _ := s.store.CreateApplication(ctx, "app-a", image, 3000)
+	b, _ := s.store.CreateApplication(ctx, "app-b", image, 3000)
+	c, _ := s.store.CreateApplication(ctx, "app-c", image, 3000)
+	type summary struct {
+		ID                string `json:"id"`
+		ProjectID         *string
+		Version           int
+		UpdatedAt         string `json:"updated_at"`
+		ServiceUsed       bool   `json:"service_used"`
+		Config            *struct{ Revision int }
+		ConfigUnavailable bool `json:"config_unavailable"`
+		Service           *struct {
+			Phase   string
+			Version int
+			Action  *struct{ Kind string }
+		}
+		ServiceUnavailable bool `json:"service_unavailable"`
+	}
+	list := func() map[string]summary {
+		rec := get("/applications")
+		var all []summary
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &all) != nil {
+			t.Fatal(rec.Code, rec.Body)
+		}
+		m := map[string]summary{}
+		for _, x := range all {
+			m[x.ID] = x
+		}
+		return m
+	}
+
+	// Without runtime and vault: plain fields, null config and service.
+	m := list()
+	if len(m) != 3 || m[a.ID].Version != 1 || m[a.ID].UpdatedAt == "" || m[a.ID].Config != nil || m[a.ID].Service != nil || m[a.ID].ServiceUnavailable {
+		t.Fatalf("%+v", m[a.ID])
+	}
+	if !strings.Contains(get("/applications").Body.String(), `"service":null`) {
+		t.Fatal("service must be an explicit null")
+	}
+
+	key, _ := age.GenerateX25519Identity()
+	vault, err := configvault.Open(ctx, filepath.Join(dir, "vault.db"), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.EnableConfig(vault); err != nil {
+		t.Fatal(err)
+	}
+	store, err := intent.Open(ctx, filepath.Join(dir, "intent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.EnableRuntime("install", store, dockerlocal.PrepareRef, &testProvider{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = vault.Set(ctx, a.ID, 0, "TOKEN", "sensitive-marker", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = vault.Set(ctx, b.ID, 0, "A", "v", false); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/applications/"+a.ID+"/service", bytes.NewBufferString(`{"revision":1,"acknowledge_no_network":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	if rec := httptest.NewRecorder(); func() int { s.mux.ServeHTTP(rec, req); return rec.Code }() != 202 {
+		t.Fatal("create failed")
+	}
+	m = list()
+	if m[a.ID].Config == nil || m[a.ID].Config.Revision != 1 || m[a.ID].Service == nil || m[a.ID].Service.Phase == "" || !m[a.ID].ServiceUsed {
+		t.Fatalf("%+v", m[a.ID])
+	}
+	if m[b.ID].Config == nil || m[b.ID].Service != nil || m[c.ID].Config != nil || m[c.ID].Service != nil || m[c.ID].ServiceUnavailable {
+		t.Fatalf("%+v %+v", m[b.ID], m[c.ID])
+	}
+	if rec := get("/applications/" + a.ID); !strings.Contains(rec.Body.String(), `"service":{"phase"`) {
+		t.Fatal(rec.Body)
+	}
+	if rec := get("/applications/missing"); rec.Code != 404 {
+		t.Fatal(rec.Code)
+	}
+
+	// An invalid action row is reported as unknown, not as a failure.
+	db, err := sql.Open("sqlite", filepath.Join(dir, "intent.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err = db.Exec(`INSERT INTO runtime_actions VALUES('install',?, 'initial','stop','dispatched','running',1)`, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	m = list()
+	if m[a.ID].Service == nil || m[a.ID].Service.Action == nil || m[a.ID].Service.Action.Kind != "unknown" {
+		t.Fatalf("%+v", m[a.ID].Service)
+	}
+
+	// A failing intention store degrades every item without failing the list.
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	m = list()
+	for _, x := range m {
+		if x.Service != nil || !x.ServiceUnavailable {
+			t.Fatalf("%+v", x)
+		}
+	}
+	if m[a.ID].Config == nil {
+		t.Fatal("config must survive a service failure")
+	}
 }

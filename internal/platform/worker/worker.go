@@ -15,10 +15,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ponytojas/darsena/internal/platform/configvault"
 	"github.com/ponytojas/darsena/internal/platform/jobs"
+	rt "github.com/ponytojas/darsena/internal/platform/runtime"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,6 +33,15 @@ type Service struct {
 	mux      *http.ServeMux
 	vault    *configvault.Vault
 	runtime  *realRuntime
+	// lifecycle orders application deletion against configuration writes:
+	// writers hold the read side and re-check the application inside it;
+	// deletion holds the write side while purging configuration and the row.
+	lifecycle sync.RWMutex
+	// intentGuard is the path of a runtime intention database that this process
+	// does not have open. See runtimeKnowledge.
+	intentGuard string
+	// beforeGate is a test hook run between the identity check and the gate.
+	beforeGate func()
 }
 type Request struct {
 	ResourceID     string `json:"resource_id"`
@@ -56,6 +67,11 @@ func send(w http.ResponseWriter, code int, v any) {
 }
 func failure(w http.ResponseWriter, code int, message string) {
 	send(w, code, map[string]string{"error": message})
+}
+
+// failureCode adds a stable machine-readable code the web client translates.
+func failureCode(w http.ResponseWriter, status int, code, message string) {
+	send(w, status, map[string]string{"error": message, "code": code})
 }
 
 // Open takes an exclusive advisory lock before recovering interrupted jobs.
@@ -163,9 +179,17 @@ func Open(ctx context.Context, dbPath, socket string) (*Service, error) {
 	mux.HandleFunc("POST /jobs", s.enqueue)
 	mux.HandleFunc("GET /jobs", s.list)
 	mux.HandleFunc("GET /jobs/{id}", s.get)
+	mux.HandleFunc("GET /image", s.checkImage)
 	mux.HandleFunc("GET /applications", s.listApplications)
 	mux.HandleFunc("GET /applications/{id}", s.getApplication)
 	mux.HandleFunc("POST /applications", s.createApplication)
+	mux.HandleFunc("POST /applications/assign", s.assignApplications)
+	mux.HandleFunc("PATCH /applications/{id}", s.updateApplication)
+	mux.HandleFunc("DELETE /applications/{id}", s.deleteApplication)
+	mux.HandleFunc("GET /projects", s.listProjects)
+	mux.HandleFunc("POST /projects", s.createProject)
+	mux.HandleFunc("PATCH /projects/{id}", s.updateProject)
+	mux.HandleFunc("DELETE /projects/{id}", s.deleteProject)
 	s.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 90 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 8 << 10}
 	return s, nil
 }
@@ -344,6 +368,7 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) Close() error {
 	_ = s.listener.Close()
 	if s.runtime != nil {
+		s.runtime.pulls.cancel()
 		_ = s.runtime.store.Close()
 	}
 	if s.vault != nil {
@@ -377,7 +402,41 @@ func (s *Service) EnableConfig(v *configvault.Vault) error {
 		if !s.requireApplication(w, r) {
 			return
 		}
-		result, err := v.History(r.Context(), r.PathValue("resource"))
+		rows, err := v.HistoryEntries(r.Context(), r.PathValue("resource"))
+		// An existing application with no configuration yet has an empty history.
+		if err != nil && !errors.Is(err, configvault.ErrNotFound) {
+			configError(w, err)
+			return
+		}
+		// The vault lists oldest first; the API answers newest first.
+		entries := make([]configvault.HistoryEntry, 0, len(rows))
+		for i := len(rows) - 1; i >= 0; i-- {
+			entries = append(entries, rows[i])
+		}
+		send(w, 200, map[string]any{"entries": entries})
+	})
+	s.mux.HandleFunc("POST /config/{resource}/variables/{name}/restore", func(w http.ResponseWriter, r *http.Request) {
+		s.lifecycle.RLock()
+		defer s.lifecycle.RUnlock()
+		if !s.requireApplication(w, r) {
+			return
+		}
+		var in struct {
+			Revision     *int64 `json:"revision"`
+			FromRevision *int64 `json:"from_revision"`
+		}
+		if !configBody(w, r, &in) {
+			return
+		}
+		if in.Revision == nil || in.FromRevision == nil {
+			failureCode(w, 400, "invalid_configuration", "revision and from_revision are required")
+			return
+		}
+		if _, err := v.Restore(r.Context(), r.PathValue("resource"), *in.Revision, r.PathValue("name"), *in.FromRevision); err != nil {
+			configError(w, err)
+			return
+		}
+		result, err := v.Get(r.Context(), r.PathValue("resource"))
 		if err != nil {
 			configError(w, err)
 			return
@@ -385,6 +444,8 @@ func (s *Service) EnableConfig(v *configvault.Vault) error {
 		send(w, 200, result)
 	})
 	s.mux.HandleFunc("PUT /config/{resource}/variables/{name}", func(w http.ResponseWriter, r *http.Request) {
+		s.lifecycle.RLock()
+		defer s.lifecycle.RUnlock()
 		if !s.requireApplication(w, r) {
 			return
 		}
@@ -408,6 +469,8 @@ func (s *Service) EnableConfig(v *configvault.Vault) error {
 		send(w, 200, result)
 	})
 	s.mux.HandleFunc("DELETE /config/{resource}/variables/{name}", func(w http.ResponseWriter, r *http.Request) {
+		s.lifecycle.RLock()
+		defer s.lifecycle.RUnlock()
 		if !s.requireApplication(w, r) {
 			return
 		}
@@ -450,35 +513,19 @@ func configBody(w http.ResponseWriter, r *http.Request, value any) bool {
 	return true
 }
 func configError(w http.ResponseWriter, err error) {
-	if errors.Is(err, configvault.ErrInvalid) {
-		failure(w, 400, "invalid configuration")
+	if errors.Is(err, configvault.ErrVariableAbsent) {
+		failureCode(w, 409, "variable_not_in_revision", "variable is not in that revision")
+	} else if errors.Is(err, configvault.ErrNotRetained) {
+		failureCode(w, 409, "revision_not_retained", "revision is no longer retained")
+	} else if errors.Is(err, configvault.ErrInvalid) {
+		failureCode(w, 400, "invalid_configuration", "invalid configuration")
 	} else if errors.Is(err, configvault.ErrConflict) {
-		failure(w, 409, "configuration changed; reload before saving")
+		failureCode(w, 409, "configuration_conflict", "configuration changed; reload before saving")
 	} else {
-		failure(w, 500, "configuration unavailable")
+		failureCode(w, 500, "configuration_unavailable", "configuration unavailable")
 	}
 }
 
-func (s *Service) listApplications(w http.ResponseWriter, r *http.Request) {
-	apps, err := s.store.Applications(r.Context())
-	if err != nil {
-		failure(w, 500, "unable to list applications")
-		return
-	}
-	send(w, 200, apps)
-}
-func (s *Service) getApplication(w http.ResponseWriter, r *http.Request) {
-	app, err := s.store.Application(r.Context(), r.PathValue("id"))
-	if errors.Is(err, jobs.ErrNotFound) {
-		failure(w, 404, "application not found")
-		return
-	}
-	if err != nil {
-		failure(w, 500, "unable to read application")
-		return
-	}
-	send(w, 200, app)
-}
 func (s *Service) createApplication(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Name  string `json:"name"`
@@ -488,9 +535,13 @@ func (s *Service) createApplication(w http.ResponseWriter, r *http.Request) {
 	if !configBody(w, r, &in) {
 		return
 	}
-	app, err := s.store.CreateApplication(r.Context(), in.Name, in.Image, in.Port)
+	image, ok := pinnedImage(w, in.Image)
+	if !ok {
+		return
+	}
+	app, err := s.store.CreateApplication(r.Context(), in.Name, image, in.Port)
 	if errors.Is(err, jobs.ErrInvalid) {
-		failure(w, 400, "invalid application")
+		failureCode(w, 400, "invalid_application", "invalid application")
 		return
 	}
 	if errors.Is(err, jobs.ErrConflict) {
@@ -504,10 +555,22 @@ func (s *Service) createApplication(w http.ResponseWriter, r *http.Request) {
 	send(w, 201, app)
 }
 
+// pinnedImage returns the canonical name@digest form of a definition image,
+// or writes invalid_image. Definitions always pin a digest; a tag alone is
+// resolved through GET /image before saving.
+func pinnedImage(w http.ResponseWriter, raw string) (string, bool) {
+	ref, err := rt.ParseImage(raw)
+	if err != nil || ref.Digest == "" {
+		failureCode(w, 400, "invalid_image", "image must be a valid reference pinned by sha256 digest")
+		return "", false
+	}
+	return ref.Pinned(), true
+}
+
 func (s *Service) requireApplication(w http.ResponseWriter, r *http.Request) bool {
 	_, err := s.store.Application(r.Context(), r.PathValue("resource"))
 	if errors.Is(err, jobs.ErrNotFound) {
-		failure(w, 404, "application not found")
+		failureCode(w, 404, "application_not_found", "application not found")
 		return false
 	}
 	if err != nil {

@@ -224,6 +224,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * List retained configuration revisions
+         * @description Value-free history, newest first. An existing application without configuration returns an empty list. Old revisions may retain secrets in the vault, but they are never returned.
+         */
         get: operations["getWorkerConfigHistory"];
         put?: never;
         post?: never;
@@ -256,7 +260,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Persistent definitions; no deployment is performed. */
+        /** @description Persistent definitions with project, configuration and (experimental) service summary; no deployment is performed. */
         get: operations["listWorkerApplications"];
         put?: never;
         post: operations["createWorkerApplication"];
@@ -276,10 +280,12 @@ export interface paths {
         get: operations["getWorkerApplication"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** @description Deletes the definition and purges its encrypted configuration. 409 application_has_service, runtime_busy or runtime_state_unknown block it. */
+        delete: operations["deleteWorkerApplication"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** @description Edits image and port with a version precondition. The image is locked (409 image_locked) once any runtime intention exists; 409 runtime_state_unknown if that cannot be determined. */
+        patch: operations["updateWorkerApplication"];
         trace?: never;
     };
     "/worker/health": {
@@ -365,6 +371,7 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
+                        /** @description Configuration revision the client saw; 0 means no saved configuration, and an empty first revision is saved before dispatching. */
                         revision: number;
                         /** @enum {boolean} */
                         acknowledge_no_network: true;
@@ -399,12 +406,14 @@ export interface paths {
                         "application/json": components["schemas"]["ExperimentalService"];
                     };
                 };
-                /** @description Invalid request */
+                /** @description Invalid request; image_incompatible or invalid_image are rejected before anything is persisted */
                 400: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
                 };
                 /** @description Owner session required */
                 401: {
@@ -420,14 +429,16 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description Conflict; code revision_conflict_before_dispatch identifies a rejected stale revision, while other conflicts do not guarantee absence of an existing operation. */
+                /** @description Conflict. revision_conflict_before_dispatch and image_missing are rejected before anything is persisted; other conflicts do not guarantee absence of an existing operation. */
                 409: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
                 };
-                /** @description Worker unavailable */
+                /** @description Worker unavailable; runtime_unavailable if image availability could not be checked (nothing persisted) */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -808,6 +819,231 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/worker/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listWorkerProjects"];
+        put?: never;
+        post: operations["createWorkerProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/worker/projects/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Never deletes applications; they become unassigned. */
+        delete: operations["deleteWorkerProject"];
+        options?: never;
+        head?: never;
+        patch: operations["updateWorkerProject"];
+        trace?: never;
+    };
+    "/worker/applications/assign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Moves applications to a project (or unassigns with a null project_id), all or nothing. Returns those actually reassigned. */
+        post: operations["assignWorkerApplications"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/worker/config/{resource}/variables/{name}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a variable from a retained revision
+         * @description Saves the value and secret flag of one variable from a retained revision as a new revision. Returns the value-free current snapshot. Errors: configuration_conflict (409, stale revision), revision_not_retained (409), variable_not_in_revision (409), invalid_configuration (400).
+         */
+        post: operations["restoreWorkerConfigVariable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/worker/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Normalize an image reference; in experimental mode also resolve a public tag and report availability in the runtime daemon */
+        get: {
+            parameters: {
+                query: {
+                    ref: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Canonical reference and availability */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImageCheck"];
+                    };
+                };
+                /** @description invalid_image, or image_digest_required without the experimental runtime */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description image_not_found: tag not found in a public registry */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description registry_unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/worker/image/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Explicitly download a pinned public image into the runtime daemon, without registry credentials (experimental only; one at a time; status through GET /worker/image) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        reference: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Already present */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImageCheck"];
+                    };
+                };
+                /** @description Download started or already running */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ImageCheck"];
+                    };
+                };
+                /** @description invalid_image */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Owner session required */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Origin or token rejected; always in demo mode */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description pull_busy: another image is downloading */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Worker unavailable */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -873,6 +1109,7 @@ export interface components {
         };
         Error: {
             error: string;
+            /** @description Stable machine-readable code. Worker codes include: invalid_configuration, configuration_conflict, configuration_unavailable, revision_not_retained, variable_not_in_revision, project_name_taken, project_not_found, project_limit, invalid_project, application_not_found, invalid_application, update_conflict, image_locked, application_has_service, runtime_busy, runtime_state_unknown, invalid_image, image_digest_required, image_not_found, registry_unavailable, pull_busy, image_missing, image_incompatible, runtime_unavailable. */
             code?: string;
         };
         Capabilities: {
@@ -948,6 +1185,14 @@ export interface components {
             port: number;
             /** Format: date-time */
             created_at: string;
+            /** @description Owning project, or null when unassigned. */
+            project_id: string | null;
+            /** @description Precondition token for edits; unchanged by moving between projects. */
+            version: number;
+            /** Format: date-time */
+            updated_at: string;
+            /** @description Permanent mark: a runtime service was once requested, so the application cannot be deleted nor change image. Written before dispatch, in any mode. */
+            service_used: boolean;
         };
         WorkerApplicationInput: {
             name: string;
@@ -978,6 +1223,133 @@ export interface components {
                 /** @enum {string} */
                 observation: "" | "absent" | "created" | "running" | "stopped" | "conflict" | "unavailable" | "unknown";
             };
+        };
+        WorkerProject: {
+            id: string;
+            name: string;
+            /** @enum {string} */
+            color: "blue" | "cyan" | "teal" | "green" | "lime" | "orange" | "rust" | "red" | "rose" | "violet" | "indigo" | "slate";
+            version: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        WorkerProjectInput: {
+            name: string;
+            /** @enum {string} */
+            color: "blue" | "cyan" | "teal" | "green" | "lime" | "orange" | "rust" | "red" | "rose" | "violet" | "indigo" | "slate";
+        };
+        WorkerProjectUpdate: {
+            version: number;
+            name: string;
+            /** @enum {string} */
+            color: "blue" | "cyan" | "teal" | "green" | "lime" | "orange" | "rust" | "red" | "rose" | "violet" | "indigo" | "slate";
+        };
+        WorkerProjectDeleted: {
+            project: components["schemas"]["WorkerProject"];
+            /** @description Former members, now unassigned; use to undo. */
+            application_ids: string[];
+        };
+        WorkerApplicationUpdate: {
+            version: number;
+            image: string;
+            port: number;
+        };
+        WorkerAssignInput: {
+            project_id: string | null;
+            application_ids: string[];
+            only_unassigned?: boolean;
+        };
+        WorkerAssignResult: {
+            applications: components["schemas"]["WorkerApplication"][];
+        };
+        WorkerApplicationSummary: components["schemas"]["WorkerApplication"] & {
+            /** @description Current encrypted configuration revision; never values. Null without configuration or when unavailable. */
+            config: {
+                /** Format: int64 */
+                revision: number;
+                /**
+                 * Format: date-time
+                 * @description Null for revisions written before dates were recorded.
+                 */
+                updated_at: string | null;
+            } | null;
+            /** @description The configuration store could not be read. */
+            config_unavailable: boolean;
+            /** @description Experimental service state; null without the experimental runtime or without a service, or when unavailable. */
+            service: {
+                /** @enum {string} */
+                phase: "prepared" | "dispatched" | "observed";
+                /** @enum {string} */
+                observation: "" | "absent" | "created" | "running" | "stopped" | "conflict" | "unavailable" | "unknown";
+                /** Format: int64 */
+                version: number;
+                action?: {
+                    /** @enum {string} */
+                    kind: "stop" | "remove" | "unknown";
+                    /** @enum {string} */
+                    phase: "dispatched" | "observed";
+                    /** @enum {string} */
+                    observation: "" | "absent" | "created" | "running" | "stopped" | "conflict" | "unavailable" | "unknown";
+                };
+            } | null;
+            /** @description Experimental runtime enabled but this application's service state could not be read (store failure or an invalid intention row). Per item, so a bare array response is kept. */
+            service_unavailable: boolean;
+        };
+        ConfigHistory: {
+            /** @description Retained revisions, newest first. */
+            entries: components["schemas"]["ConfigHistoryEntry"][];
+        };
+        ConfigHistoryEntry: {
+            /** Format: int64 */
+            revision: number;
+            /**
+             * Format: date-time
+             * @description Null when the revision predates date recording.
+             */
+            created_at: string | null;
+            /** @description Oldest retained revision: its changes list every variable as added. */
+            base: boolean;
+            changes: components["schemas"]["ConfigHistoryChange"][];
+        };
+        ConfigHistoryChange: {
+            name: string;
+            /** @enum {string} */
+            kind: "added" | "changed" | "removed";
+            secret: boolean;
+        };
+        RestoreConfigVariable: {
+            /**
+             * Format: int64
+             * @description Current revision (precondition).
+             */
+            revision: number;
+            /**
+             * Format: int64
+             * @description Retained revision to read the variable from.
+             */
+            from_revision: number;
+        };
+        ImageCheck: {
+            /** @description Canonical registry/name@sha256:digest form to save. */
+            reference: string;
+            /** @description name:tag resolved to the digest through the public registry (experimental mode only). */
+            resolved_from?: string;
+            /**
+             * @description not_checked without the experimental runtime; unknown if the daemon could not be asked.
+             * @enum {string}
+             */
+            status: "not_checked" | "available" | "missing" | "pulling" | "pull_failed" | "incompatible" | "unknown";
+            /**
+             * @description For incompatible: platform or volumes. For pull_failed: platform, not_found, timeout or unavailable.
+             * @enum {string}
+             */
+            reason?: "platform" | "volumes" | "not_found" | "timeout" | "unavailable";
+            /** @description os/arch of the local image */
+            platform?: string;
+            /** @description os/arch of the runtime daemon */
+            daemon_platform?: string;
         };
     };
     responses: never;
@@ -1668,7 +2040,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": number[];
+                    "application/json": components["schemas"]["ConfigHistory"];
                 };
             };
             /** @description Request rejected */
@@ -1931,7 +2303,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkerApplication"][];
+                    "application/json": components["schemas"]["WorkerApplicationSummary"][];
                 };
             };
             /** @description Request failed */
@@ -2103,6 +2475,178 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    "application/json": components["schemas"]["WorkerApplicationSummary"];
+                };
+            };
+            /** @description Request failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteWorkerApplication: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Request failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    updateWorkerApplication: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerApplicationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
                     "application/json": components["schemas"]["WorkerApplication"];
                 };
             };
@@ -2190,6 +2734,527 @@ export interface operations {
                 };
             };
             /** @description Worker unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listWorkerProjects: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerProject"][];
+                };
+            };
+            /** @description Request failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createWorkerProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerProjectInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerProject"];
+                };
+            };
+            /** @description Request failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteWorkerProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerProjectDeleted"];
+                };
+            };
+            /** @description Request failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    updateWorkerProject: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerProjectUpdate"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerProject"];
+                };
+            };
+            /** @description Request failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    assignWorkerApplications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerAssignInput"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerAssignResult"];
+                };
+            };
+            /** @description Request failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request failed */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    restoreWorkerConfigVariable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                resource: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreConfigVariable"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigSnapshot"];
+                };
+            };
+            /** @description Request rejected */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request rejected */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request rejected */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request rejected */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request rejected */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request rejected */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Request rejected */
             503: {
                 headers: {
                     [name: string]: unknown;

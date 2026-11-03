@@ -222,6 +222,20 @@ func (s *Store) Get(ctx context.Context, id rt.Identity) (Intent, error) {
 	return v, nil
 }
 
+// HasService reports whether any intention exists for the service, in any
+// installation, operation or phase. Intentions are never deleted, so true is permanent.
+func (s *Store) HasService(ctx context.Context, service string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM runtime_intents WHERE service=? LIMIT 1`, service).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	return true, nil
+}
+
 // ListRecoverable enumerates dispatched and observed intentions with keyset
 // pagination. Concurrent inserts before the cursor are visited on a later pass.
 func (s *Store) ListRecoverable(ctx context.Context, after *rt.Identity, limit int) ([]Intent, error) {

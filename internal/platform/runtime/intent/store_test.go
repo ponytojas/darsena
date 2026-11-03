@@ -326,3 +326,25 @@ func TestRejectUnsafeFilesAndCorruptState(t *testing.T) {
 		t.Fatalf("corrupt row: %v", err)
 	}
 }
+
+func TestHasServiceSeesPreparedIntentions(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, testPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ref := testRef()
+	if has, err := s.HasService(ctx, ref.Identity.Service); err != nil || has {
+		t.Fatal(has, err)
+	}
+	if _, err = s.Prepare(ctx, ref, 1); err != nil {
+		t.Fatal(err)
+	}
+	if has, err := s.HasService(ctx, ref.Identity.Service); err != nil || !has {
+		t.Fatal(has, err)
+	}
+	if has, err := s.HasService(ctx, "other"); err != nil || has {
+		t.Fatal(has, err)
+	}
+}

@@ -33,6 +33,7 @@ func send(w http.ResponseWriter, status int, value any) {
 func problem(w http.ResponseWriter, status int, message string) {
 	send(w, status, map[string]string{"error": message})
 }
+
 // problemCode adds a stable code so clients can translate the message.
 func problemCode(w http.ResponseWriter, status int, code, message string) {
 	send(w, status, map[string]string{"error": message, "code": code})
@@ -79,7 +80,7 @@ func (a API) Handler(webDir string) http.Handler {
 			// A demo server must never forward real-service operations, even if
 			// inadvertently connected to an experimental worker.
 			for _, part := range strings.Split(r.URL.Path, "/") {
-				if part == "service" && a.Owner == nil {
+				if (part == "service" || part == "pull") && a.Owner == nil {
 					problem(w, http.StatusForbidden, "Operación no disponible.")
 					return
 				}

@@ -37,8 +37,9 @@ const prefix = "io.darsena.runtime."
 var containerID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var _ rt.Runtime = (*Adapter)(nil)
 
-// Adapter talks only to an explicitly configured local Unix socket.
-type Adapter struct{ client *http.Client }
+// Adapter talks only to an explicitly configured local Unix socket. long has
+// no client timeout and is used only for image pulls bounded by the caller.
+type Adapter struct{ client, long *http.Client }
 
 // New requires a private socket owned by the current non-root service account.
 // Filesystem checks cannot prevent concurrent replacement; the enclosing directory
@@ -77,7 +78,11 @@ func New(socket string) (*Adapter, error) {
 	return newAdapter(transport), nil
 }
 func newAdapter(transport http.RoundTripper) *Adapter {
-	return &Adapter{client: &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Adapter{
+		client: &http.Client{Transport: transport, Timeout: 15 * time.Second, CheckRedirect: noRedirect},
+		long:   &http.Client{Transport: transport, CheckRedirect: noRedirect},
+	}
 }
 
 func contextError(ctx context.Context) error {

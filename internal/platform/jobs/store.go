@@ -8,11 +8,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite"
 )
@@ -66,7 +69,13 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err = f.Close(); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	// Pragmas in the DSN apply to every connection the pool opens, not only the first.
+	dsn := url.URL{Scheme: "file", Path: path}
+	query := url.Values{}
+	query.Add("_pragma", "busy_timeout(5000)")
+	query.Add("_pragma", "foreign_keys(1)")
+	dsn.RawQuery = query.Encode()
+	db, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +88,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fail(err)
 	}
-	if version > 2 {
+	if version > 3 {
 		return fail(fmt.Errorf("unsupported database version %d", version))
 	}
 	if version == 0 {
@@ -117,6 +126,30 @@ func Open(ctx context.Context, path string) (*Store, error) {
 			return fail(e)
 		}
 	}
+	if version < 3 {
+		tx, e := db.BeginTx(ctx, nil)
+		if e != nil {
+			return fail(e)
+		}
+		_, e = tx.ExecContext(ctx, `CREATE TABLE projects (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE, color TEXT NOT NULL,
+    version INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  ALTER TABLE applications ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL;
+  ALTER TABLE applications ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+  ALTER TABLE applications ADD COLUMN updated_at TEXT;
+  ALTER TABLE applications ADD COLUMN runtime_used INTEGER NOT NULL DEFAULT 0;
+  UPDATE applications SET updated_at = created_at;
+  CREATE INDEX applications_project ON applications(project_id);
+  PRAGMA user_version = 3;`)
+		if e != nil {
+			_ = tx.Rollback()
+			return fail(e)
+		}
+		if e = tx.Commit(); e != nil {
+			return fail(e)
+		}
+	}
 	return &Store{db: db}, nil
 }
 func (s *Store) Close() error { return s.db.Close() }
@@ -127,7 +160,10 @@ func (s *Store) Check(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM jobs WHERE 0").Scan(&n); err != nil {
 		return err
 	}
-	return s.db.QueryRowContext(ctx, "SELECT count(*) FROM applications WHERE 0").Scan(&n)
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM applications WHERE 0").Scan(&n); err != nil {
+		return err
+	}
+	return s.db.QueryRowContext(ctx, "SELECT count(*) FROM projects WHERE 0").Scan(&n)
 }
 func randomID() (string, error) {
 	var b [16]byte
@@ -346,20 +382,80 @@ func (s *Store) List(ctx context.Context, limit int) ([]Job, error) {
 }
 
 // Application is a persisted definition. No infrastructure is changed when creating it.
+// ProjectID is nil when the application is not assigned to a project.
 type Application struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Image     string    `json:"image"`
 	Port      int       `json:"port"`
 	CreatedAt time.Time `json:"created_at"`
+	ProjectID *string   `json:"project_id"`
+	Version   int       `json:"version"`
+	UpdatedAt time.Time `json:"updated_at"`
+	// ServiceUsed is a permanent mark: a runtime service was once requested for
+	// this application, so it cannot be deleted nor change image. It survives
+	// restarts in any mode, unlike the runtime's own intention records.
+	ServiceUsed bool `json:"service_used"`
+}
+
+// Project groups applications; an application belongs to at most one project.
+type Project struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Color     string    `json:"color"`
+	Version   int       `json:"version"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 var applicationName = regexp.MustCompile(`^[a-z][a-z0-9-]{1,39}$`)
 var imageDigest = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0-9]{64}$`)
 var ErrInvalid = errors.New("invalid application definition")
+var ErrProjectNotFound = errors.New("project not found")
+var ErrProjectLimit = errors.New("project limit reached")
+
+// MaxProjects bounds the number of projects.
+const MaxProjects = 100
+
+// maxAssign bounds one bulk assignment.
+const maxAssign = 500
+
+// ProjectColors mirrors the accents in web/src/lib/theme.ts.
+var ProjectColors = []string{"blue", "cyan", "teal", "green", "lime", "orange", "rust", "red", "rose", "violet", "indigo", "slate"}
+
+func validApplication(image string, port int) bool {
+	return len(image) <= 512 && imageDigest.MatchString(image) && port >= 1 && port <= 65535
+}
+
+// projectKey validates a project name and returns its trimmed form and its
+// uniqueness key. The key is the lower-cased name (full Unicode case mapping, so
+// "Ñandú" and "ñandú" collide). golang.org/x/text is not a dependency, so no NFC
+// normalisation is applied: canonically equivalent but differently encoded names
+// (precomposed vs combining accents) are treated as distinct.
+func projectKey(name string) (string, string, bool) {
+	name = strings.TrimSpace(name)
+	if n := utf8.RuneCountInString(name); n < 1 || n > 40 || !utf8.ValidString(name) {
+		return "", "", false
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", "", false
+		}
+	}
+	return name, strings.ToLower(name), true
+}
+func validColor(color string) bool {
+	for _, c := range ProjectColors {
+		if c == color {
+			return true
+		}
+	}
+	return false
+}
+func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
 func (s *Store) CreateApplication(ctx context.Context, name, image string, port int) (Application, error) {
-	if !applicationName.MatchString(name) || len(image) > 512 || !imageDigest.MatchString(image) || port < 1 || port > 65535 {
+	if !applicationName.MatchString(name) || !validApplication(image, port) {
 		return Application{}, ErrInvalid
 	}
 	id, err := randomID()
@@ -367,7 +463,7 @@ func (s *Store) CreateApplication(ctx context.Context, name, image string, port 
 		return Application{}, err
 	}
 	created := time.Now().UTC()
-	result, err := s.db.ExecContext(ctx, "INSERT INTO applications(id,name,image,port,created_at) VALUES(?,?,?,?,?) ON CONFLICT(name) DO NOTHING", id, name, image, port, created.Format(time.RFC3339Nano))
+	result, err := s.db.ExecContext(ctx, "INSERT INTO applications(id,name,image,port,created_at,version,updated_at) VALUES(?,?,?,?,?,1,?) ON CONFLICT(name) DO NOTHING", id, name, image, port, stamp(created), stamp(created))
 	if err != nil {
 		return Application{}, err
 	}
@@ -378,22 +474,47 @@ func (s *Store) CreateApplication(ctx context.Context, name, image string, port 
 	if count == 0 {
 		return Application{}, ErrConflict
 	}
-	return Application{ID: id, Name: name, Image: image, Port: port, CreatedAt: created}, nil
+	return Application{ID: id, Name: name, Image: image, Port: port, CreatedAt: created, Version: 1, UpdatedAt: created}, nil
+}
+
+const applicationColumns = "id,name,image,port,created_at,project_id,version,updated_at,runtime_used"
+
+func scanApplication(row scanner) (Application, error) {
+	var app Application
+	var created string
+	var project, updated sql.NullString
+	var used int
+	err := row.Scan(&app.ID, &app.Name, &app.Image, &app.Port, &created, &project, &app.Version, &updated, &used)
+	if errors.Is(err, sql.ErrNoRows) {
+		return app, ErrNotFound
+	}
+	if err != nil {
+		return app, err
+	}
+	if app.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
+		return app, err
+	}
+	app.UpdatedAt = app.CreatedAt
+	if updated.Valid {
+		if app.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated.String); err != nil {
+			return app, err
+		}
+	}
+	app.ServiceUsed = used != 0
+	if project.Valid {
+		app.ProjectID = &project.String
+	}
+	return app, nil
 }
 func (s *Store) Applications(ctx context.Context) ([]Application, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT id,name,image,port,created_at FROM applications ORDER BY name LIMIT 500")
+	rows, err := s.db.QueryContext(ctx, "SELECT "+applicationColumns+" FROM applications ORDER BY name LIMIT 500")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Application{}
 	for rows.Next() {
-		var app Application
-		var date string
-		if err = rows.Scan(&app.ID, &app.Name, &app.Image, &app.Port, &date); err != nil {
-			return nil, err
-		}
-		app.CreatedAt, err = time.Parse(time.RFC3339Nano, date)
+		app, err := scanApplication(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -402,15 +523,261 @@ func (s *Store) Applications(ctx context.Context) ([]Application, error) {
 	return out, rows.Err()
 }
 func (s *Store) Application(ctx context.Context, id string) (Application, error) {
-	var app Application
-	var date string
-	err := s.db.QueryRowContext(ctx, "SELECT id,name,image,port,created_at FROM applications WHERE id=?", id).Scan(&app.ID, &app.Name, &app.Image, &app.Port, &date)
+	return scanApplication(s.db.QueryRowContext(ctx, "SELECT "+applicationColumns+" FROM applications WHERE id=?", id))
+}
+
+// UpdateApplication changes image and port if expectedVersion is current. The name is immutable.
+func (s *Store) UpdateApplication(ctx context.Context, id string, expectedVersion int, image string, port int) (Application, error) {
+	if !validApplication(image, port) {
+		return Application{}, ErrInvalid
+	}
+	res, err := s.db.ExecContext(ctx, "UPDATE applications SET image=?,port=?,version=version+1,updated_at=? WHERE id=? AND version=?", image, port, stamp(time.Now()), id, expectedVersion)
+	if err != nil {
+		return Application{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return Application{}, err
+	}
+	if n == 0 {
+		if _, err = s.Application(ctx, id); err != nil {
+			return Application{}, err
+		}
+		return Application{}, ErrConflict
+	}
+	return s.Application(ctx, id)
+}
+
+// MarkRuntimeUsed permanently records that a runtime service was requested.
+// It must complete before the request is dispatched.
+func (s *Store) MarkRuntimeUsed(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, "UPDATE applications SET runtime_used=1 WHERE id=?", id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteApplication removes only the definition. Callers must check runtime
+// state first; this store knows nothing about it.
+func (s *Store) DeleteApplication(ctx context.Context, id string) error {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM applications WHERE id=?", id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+const projectColumns = "id,name,color,version,created_at,updated_at"
+
+func scanProject(row scanner) (Project, error) {
+	var p Project
+	var created, updated string
+	err := row.Scan(&p.ID, &p.Name, &p.Color, &p.Version, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
-		return app, ErrNotFound
+		return p, ErrProjectNotFound
 	}
 	if err != nil {
-		return app, err
+		return p, err
 	}
-	app.CreatedAt, err = time.Parse(time.RFC3339Nano, date)
-	return app, err
+	if p.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
+		return p, err
+	}
+	p.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated)
+	return p, err
+}
+
+// CreateProject returns ErrInvalid, ErrConflict (name already used, ignoring case) or ErrProjectLimit.
+func (s *Store) CreateProject(ctx context.Context, name, color string) (Project, error) {
+	name, key, ok := projectKey(name)
+	if !ok || !validColor(color) {
+		return Project{}, ErrInvalid
+	}
+	id, err := randomID()
+	if err != nil {
+		return Project{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback()
+	var count int
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM projects").Scan(&count); err != nil {
+		return Project{}, err
+	}
+	if count >= MaxProjects {
+		return Project{}, ErrProjectLimit
+	}
+	now := stamp(time.Now())
+	res, err := tx.ExecContext(ctx, "INSERT INTO projects(id,name,name_key,color,version,created_at,updated_at) VALUES(?,?,?,?,1,?,?) ON CONFLICT(name_key) DO NOTHING", id, name, key, color, now, now)
+	if err != nil {
+		return Project{}, err
+	}
+	if n, e := res.RowsAffected(); e != nil {
+		return Project{}, e
+	} else if n == 0 {
+		return Project{}, ErrConflict
+	}
+	p, err := scanProject(tx.QueryRowContext(ctx, "SELECT "+projectColumns+" FROM projects WHERE id=?", id))
+	if err != nil {
+		return Project{}, err
+	}
+	return p, tx.Commit()
+}
+func (s *Store) Projects(ctx context.Context) ([]Project, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+projectColumns+" FROM projects ORDER BY name_key, id LIMIT ?", MaxProjects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Project{}
+	for rows.Next() {
+		p, err := scanProject(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// Project returns ErrProjectNotFound when absent.
+func (s *Store) Project(ctx context.Context, id string) (Project, error) {
+	return scanProject(s.db.QueryRowContext(ctx, "SELECT "+projectColumns+" FROM projects WHERE id=?", id))
+}
+
+// UpdateProject returns ErrConflict if expectedVersion is stale or the new name is taken.
+func (s *Store) UpdateProject(ctx context.Context, id string, expectedVersion int, name, color string) (Project, error) {
+	name, key, ok := projectKey(name)
+	if !ok || !validColor(color) {
+		return Project{}, ErrInvalid
+	}
+	res, err := s.db.ExecContext(ctx, "UPDATE projects SET name=?,name_key=?,color=?,version=version+1,updated_at=? WHERE id=? AND version=? AND NOT EXISTS (SELECT 1 FROM projects WHERE name_key=? AND id<>?)", name, key, color, stamp(time.Now()), id, expectedVersion, key, id)
+	if err != nil {
+		return Project{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return Project{}, err
+	}
+	if n == 0 {
+		if _, err = s.Project(ctx, id); err != nil {
+			return Project{}, err
+		}
+		return Project{}, ErrConflict
+	}
+	return s.Project(ctx, id)
+}
+
+// DeleteProject detaches its applications (they become unassigned, never deleted)
+// and returns the project with the IDs of its former members, for undo.
+func (s *Store) DeleteProject(ctx context.Context, id string) (Project, []string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Project{}, nil, err
+	}
+	defer tx.Rollback()
+	p, err := scanProject(tx.QueryRowContext(ctx, "SELECT "+projectColumns+" FROM projects WHERE id=?", id))
+	if err != nil {
+		return Project{}, nil, err
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT id FROM applications WHERE project_id=? ORDER BY name", id)
+	if err != nil {
+		return Project{}, nil, err
+	}
+	members := []string{}
+	for rows.Next() {
+		var member string
+		if err = rows.Scan(&member); err != nil {
+			rows.Close()
+			return Project{}, nil, err
+		}
+		members = append(members, member)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return Project{}, nil, err
+	}
+	if err = rows.Close(); err != nil {
+		return Project{}, nil, err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE applications SET project_id=NULL,updated_at=? WHERE project_id=?", stamp(time.Now()), id); err != nil {
+		return Project{}, nil, err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM projects WHERE id=?", id); err != nil {
+		return Project{}, nil, err
+	}
+	return p, members, tx.Commit()
+}
+
+// AssignApplications moves applications to a project (nil unassigns), all or nothing.
+// ErrProjectNotFound or ErrNotFound abort the whole change. With onlyUnassigned,
+// applications that already have a project are left alone (used by undo). It
+// returns the IDs actually reassigned. It refreshes updated_at but not version.
+func (s *Store) AssignApplications(ctx context.Context, projectID *string, appIDs []string, onlyUnassigned bool) ([]string, error) {
+	if len(appIDs) > maxAssign {
+		return nil, ErrInvalid
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if projectID != nil {
+		var one int
+		err = tx.QueryRowContext(ctx, "SELECT 1 FROM projects WHERE id=?", *projectID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrProjectNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	var target any
+	if projectID != nil {
+		target = *projectID
+	}
+	now := stamp(time.Now())
+	seen := map[string]bool{}
+	changed := []string{}
+	for _, id := range appIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		var current sql.NullString
+		err = tx.QueryRowContext(ctx, "SELECT project_id FROM applications WHERE id=?", id).Scan(&current)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		if onlyUnassigned && current.Valid {
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE applications SET project_id=?,updated_at=? WHERE id=?", target, now, id); err != nil {
+			return nil, err
+		}
+		changed = append(changed, id)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return changed, nil
 }
