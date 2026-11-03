@@ -87,6 +87,7 @@ type serviceResponse struct {
 	Observation   reconcile.Observation `json:"observation"`
 	Version       uint64                `json:"version"`
 	Action        *intent.Action        `json:"action,omitempty"`
+	ExitCode      *int                  `json:"exit_code,omitempty"`
 }
 
 func (s *Service) serviceView(ctx context.Context, v intent.Intent) serviceResponse {
@@ -247,6 +248,7 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	}
 	send(w, http.StatusCreated, s.serviceView(r.Context(), result.Intent))
 }
+
 // imageReady writes a coded failure unless the pinned image is available.
 func (s *Service) imageReady(w http.ResponseWriter, r *http.Request, pinned string) bool {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -308,7 +310,7 @@ func (s *Service) refreshService(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	obs := reconcile.Observe(ctx, s.runtime.provider, item.Ref)
+	obs, exitCode := reconcile.ObserveExit(ctx, s.runtime.provider, item.Ref)
 	if ctx.Err() != nil {
 		obs = reconcile.Unknown
 	}
@@ -331,7 +333,12 @@ func (s *Service) refreshService(w http.ResponseWriter, r *http.Request) {
 		failure(w, 503, "operation unavailable")
 		return
 	}
-	send(w, 200, s.serviceView(r.Context(), item))
+	view := s.serviceView(r.Context(), item)
+	if obs == reconcile.Stopped {
+		// Only known right after an inspection; it is not persisted.
+		view.ExitCode = exitCode
+	}
+	send(w, 200, view)
 }
 
 func (s *Service) stopService(w http.ResponseWriter, r *http.Request) { s.mutateService(w, r, "stop") }

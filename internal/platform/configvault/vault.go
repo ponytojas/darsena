@@ -352,6 +352,7 @@ func (v *Vault) Delete(ctx context.Context, resource string, expected int64, nam
 	doc.Touched = []string{name}
 	return v.save(ctx, doc, expected)
 }
+
 // Initialize saves an empty first revision for a resource without any saved
 // configuration, so an application without variables can be deployed. It
 // returns ErrConflict if a configuration already exists.

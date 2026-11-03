@@ -62,6 +62,8 @@ const (
 type Result struct {
 	Ref   Ref
 	State State
+	// ExitCode is the process exit status of a stopped resource, when known.
+	ExitCode *int
 }
 
 // Runtime must verify complete ownership before inspecting or mutating a resource.

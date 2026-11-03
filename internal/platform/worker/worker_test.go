@@ -626,7 +626,7 @@ func TestApplicationImagesAreStoredPinnedAndCanonical(t *testing.T) {
 	w := h.request("POST", "/applications", `{"name":"hola","image":"hello-world:nanoserver@sha256:`+strings.Repeat("A", 64)+`","port":8080}`)
 	h.expect(w, 201, "")
 	var app jobs.Application
-	if err := json.Unmarshal(w.Body.Bytes(), &app); err != nil || app.Image != "docker.io/library/hello-world@"+digest {
+	if err := json.Unmarshal(w.Body.Bytes(), &app); err != nil || app.Image != "docker.io/library/hello-world:nanoserver@"+digest {
 		t.Fatalf("stored image %q (%v)", app.Image, err)
 	}
 	h.expect(h.request("POST", "/applications", `{"name":"sin-digest","image":"nginx:1.27","port":8080}`), 400, "invalid_image")

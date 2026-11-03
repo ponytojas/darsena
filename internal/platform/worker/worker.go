@@ -555,16 +555,16 @@ func (s *Service) createApplication(w http.ResponseWriter, r *http.Request) {
 	send(w, 201, app)
 }
 
-// pinnedImage returns the canonical name@digest form of a definition image,
-// or writes invalid_image. Definitions always pin a digest; a tag alone is
-// resolved through GET /image before saving.
+// pinnedImage returns the canonical name[:tag]@digest form of a definition
+// image, or writes invalid_image. Definitions always pin a digest (a tag alone
+// is resolved through GET /image before saving); the tag is kept for display.
 func pinnedImage(w http.ResponseWriter, raw string) (string, bool) {
 	ref, err := rt.ParseImage(raw)
 	if err != nil || ref.Digest == "" {
 		failureCode(w, 400, "invalid_image", "image must be a valid reference pinned by sha256 digest")
 		return "", false
 	}
-	return ref.Pinned(), true
+	return ref.Canonical(), true
 }
 
 func (s *Service) requireApplication(w http.ResponseWriter, r *http.Request) bool {

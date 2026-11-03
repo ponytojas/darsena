@@ -41,6 +41,8 @@ type testProvider struct {
 	pullErr  error
 	pulls    atomic.Int32
 	pullGate chan struct{}
+	// inspectErr, when set, is returned by Inspect.
+	inspectErr error
 }
 
 func (p *testProvider) Check(context.Context) error { return p.checkErr }
@@ -118,6 +120,9 @@ func (p *testProvider) CreateConfigured(ctx context.Context, s rt.Spec, a config
 }
 func (p *testProvider) Inspect(ctx context.Context, r rt.Ref) (rt.Result, error) {
 	p.inspects.Add(1)
+	if p.inspectErr != nil {
+		return rt.Result{}, p.inspectErr
+	}
 	if p.result.Ref != r {
 		return rt.Result{}, rt.ErrNotFound
 	}
@@ -507,7 +512,8 @@ func TestCreateServiceMarksApplicationAndHandlesDeletion(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		demo.mux.ServeHTTP(rec, req)
-		want := "application_has_service"
+		// Without the runtime, absence of the container cannot be confirmed.
+		want := "runtime_state_unknown"
 		if c.method == "PATCH" {
 			want = "image_locked"
 		}

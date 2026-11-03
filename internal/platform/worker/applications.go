@@ -5,8 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/ponytojas/darsena/internal/platform/jobs"
+	rt "github.com/ponytojas/darsena/internal/platform/runtime"
+	"github.com/ponytojas/darsena/internal/platform/runtime/intent"
+	"github.com/ponytojas/darsena/internal/platform/runtime/reconcile"
 )
 
 // GuardIntentDB records the path of a runtime intention database that this
@@ -127,6 +131,41 @@ func (s *Service) updateApplication(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// serviceGone reports whether an application that once requested a service no
+// longer has a container, so it can be deleted; otherwise it writes the reason.
+// The caller holds the runtime gate, so nothing can be dispatched meanwhile.
+// Intention records are kept: application ids are random and never reused.
+func (s *Service) serviceGone(w http.ResponseWriter, r *http.Request, appID string) bool {
+	if s.runtime == nil {
+		failureCode(w, 409, "runtime_state_unknown", "the runtime is needed to confirm the service no longer exists")
+		return false
+	}
+	id := rt.Identity{Installation: s.runtime.installation, Service: appID, Operation: serviceOperation}
+	item, err := s.runtime.store.Get(r.Context(), id)
+	if errors.Is(err, intent.ErrNotFound) {
+		// Marked but nothing was ever persisted or sent.
+		return true
+	}
+	if err != nil {
+		failureCode(w, 409, "runtime_state_unknown", "runtime state cannot be determined")
+		return false
+	}
+	if item.Phase == intent.Prepared {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	switch reconcile.Observe(ctx, s.runtime.provider, item.Ref) {
+	case reconcile.Absent:
+		return true
+	case reconcile.Running, reconcile.Created, reconcile.Stopped:
+		failureCode(w, 409, "application_has_service", "remove the service before deleting the application")
+	default:
+		failureCode(w, 409, "runtime_state_unknown", "runtime state cannot be determined")
+	}
+	return false
+}
+
 func (s *Service) deleteApplication(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !s.acquireRuntime(w) {
@@ -146,8 +185,7 @@ func (s *Service) deleteApplication(w http.ResponseWriter, r *http.Request) {
 		failureCode(w, 409, "runtime_state_unknown", "runtime state cannot be determined")
 		return
 	}
-	if exists {
-		failureCode(w, 409, "application_has_service", "the application has a service and cannot be deleted")
+	if exists && !s.serviceGone(w, r, app.ID) {
 		return
 	}
 	// Exclude configuration writers: with the write side held none can sit
