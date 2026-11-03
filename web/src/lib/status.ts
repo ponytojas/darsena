@@ -12,7 +12,7 @@ export function exampleHealth(app: Application, operations: Operation[]): Health
 }
 
 /** Health of a persistent definition from its isolated service; `uncertain` marks an unconfirmed action or attempt. */
-export function definitionHealth(service: ExperimentalService | undefined, uncertain: boolean): Health {
+export function definitionHealth(service: Pick<ExperimentalService, "phase" | "observation"> | undefined, uncertain: boolean): Health {
   if (uncertain) return "attention";
   if (!service) return "idle";
   const state = service.observation || service.phase;

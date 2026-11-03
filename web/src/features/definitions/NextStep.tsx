@@ -2,10 +2,15 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Loading } from "@/components/shared";
 import { useI18n } from "@/i18n/context";
+import { errorMessage } from "@/i18n/errors";
+import { ImageAvailability } from "./ImageAvailability";
 import { createUncertain, type IsolatedServiceState } from "./serviceState";
+import type { ImageCheckState } from "./useImageCheck";
 
 /** One primary action per state. Uncertain results only ever offer a status query; nothing is re-sent automatically. */
-export function NextStep({ svc, experimental, available, readable, revision, configReady, onAddVariable }: {
+export function NextStep({ svc, image, experimental, available, readable, revision, configReady, onAddVariable, onChangeImage }: {
+  image: ImageCheckState;
+  onChangeImage: () => void;
   svc: IsolatedServiceState;
   experimental: boolean;
   available: boolean;
@@ -17,8 +22,9 @@ export function NextStep({ svc, experimental, available, readable, revision, con
   const { t } = useI18n();
   const d = t.definitions;
   const s = d.service;
-  const { service, create, refresh, missing, pendingAction, canChange, configFetching, attempted, acknowledged, setAcknowledged, confirmRemove, setConfirmRemove, revisionConflict, state, stop, confirmRemoval, query } = svc;
-  const addVariable = <div className="grid justify-items-start gap-3"><p>{d.firstVariable}</p><Button onClick={onAddVariable}>{d.addVariable}</Button></div>;
+  const { service, create, refresh, missing, pendingAction, canChange, configFetching, attempted, acknowledged, setAcknowledged, confirmRemove, setConfirmRemove, revisionConflict, noServiceConfirmed, state, stop, confirmRemoval, query } = svc;
+  const imageStatus = image.check.data?.status;
+  const imageBlocks = !!imageStatus && imageStatus !== "available" && imageStatus !== "unknown";
   if (!experimental) return <div className="grid justify-items-start gap-3"><p>{d.demoNoServices}</p>{configReady && revision === 0 && <Button onClick={onAddVariable}>{d.addVariable}</Button>}</div>;
   if (!available) return <p>{s.unavailable}</p>;
   if (!readable) return null;
@@ -35,10 +41,17 @@ export function NextStep({ svc, experimental, available, readable, revision, con
       {queryButton(!(canChange && (state === "running" || state === "stopped" || state === "created")))}
     </div> : uncertainCreate ? <>
       <p role="alert">{s.uncertainCreate}</p>{queryButton(true)}
-    </> : missing && !attempted ? revision > 0 ? <>
+    </> : missing && !attempted ? imageBlocks ? <>
+      <p>{d.image.beforeCreate}</p>
+      <ImageAvailability image={image} />
+      {imageStatus === "incompatible" && <Button variant="outline" onClick={onChangeImage}>{d.image.changeInSettings}</Button>}
+    </> : <>
+      {noServiceConfirmed && <p role="status">{s.noServiceAfterQuery}</p>}
+      {create.isError && create.error instanceof Error && (create.error as { code?: string }).code !== "revision_conflict_before_dispatch" && <p role="alert" className="text-destructive">{errorMessage(create.error, t)}</p>}
+      {configReady && revision === 0 && <p className="text-sm text-muted-foreground">{s.noVariables}</p>}
       <label className="flex items-start gap-2"><input type="checkbox" className="mt-1" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /> {s.acknowledge}</label>
-      <Button disabled={!acknowledged || create.isPending || revisionConflict && configFetching} onClick={() => create.mutate()}>{s.create}</Button>
-    </> : configReady ? addVariable : <p>{s.needsVariable}</p> : queryButton(true)}
+      <Button disabled={!acknowledged || create.isPending || !configReady || revisionConflict && configFetching} onClick={() => create.mutate()}>{s.create}</Button>
+    </> : queryButton(true)}
     {refresh.isError && <p role="alert">{s.refreshFailed}</p>}
     <Dialog open={confirmRemove} onOpenChange={setConfirmRemove}><DialogContent><DialogHeader><DialogTitle>{s.remove}</DialogTitle><DialogDescription>{s.removeDescription}</DialogDescription></DialogHeader><div className="flex flex-wrap gap-2"><Button variant="destructive" disabled={!canChange} onClick={confirmRemoval}>{s.confirmRemove}</Button><Button variant="outline" onClick={() => setConfirmRemove(false)}>{d.cancel}</Button></div></DialogContent></Dialog>
   </div>;

@@ -5,6 +5,11 @@ export type Operation = components["schemas"]["Operation"];
 export type CreateInput = components["schemas"]["CreateInput"];
 export type WorkerJob = components["schemas"]["WorkerJob"];
 export type Scenario = components["schemas"]["Scenario"];
+export type WorkerApplication = components["schemas"]["WorkerApplicationSummary"];
+export type Project = components["schemas"]["WorkerProject"];
+export type ProjectInput = components["schemas"]["WorkerProjectInput"];
+export type HistoryEntry = components["schemas"]["ConfigHistoryEntry"];
+export type ImageCheck = components["schemas"]["ImageCheck"];
 /** Stable identifiers, not UI text: they are translated at render time (see i18n/errors.ts). */
 export const clientErrors = {
   loginFailed: "client:login_failed",
@@ -107,6 +112,26 @@ export const api = {
         body: { revision },
       }),
     ),
+  workerProjects: async () => unwrap(await client.GET("/worker/projects")),
+  workerProjectCreate: async (body: ProjectInput) => unwrap(await client.POST("/worker/projects", { body })),
+  workerProjectUpdate: async (id: string, body: components["schemas"]["WorkerProjectUpdate"]) =>
+    unwrap(await client.PATCH("/worker/projects/{id}", { params: { path: { id } }, body })),
+  workerProjectDelete: async (id: string) =>
+    unwrap(await client.DELETE("/worker/projects/{id}", { params: { path: { id } } })),
+  workerAssign: async (body: components["schemas"]["WorkerAssignInput"]) =>
+    unwrap(await client.POST("/worker/applications/assign", { body })),
+  workerImage: async (ref: string) => unwrap(await client.GET("/worker/image", { params: { query: { ref } } })),
+  workerImagePull: async (reference: string) => unwrap(await client.POST("/worker/image/pull", { body: { reference } })),
+  workerAppUpdate: async (id: string, body: components["schemas"]["WorkerApplicationUpdate"]) =>
+    unwrap(await client.PATCH("/worker/applications/{id}", { params: { path: { id } }, body })),
+  workerAppDelete: async (id: string) => {
+    const result = await client.DELETE("/worker/applications/{id}", { params: { path: { id } } });
+    if (result.error) throw new ApiError(result.error.error, result.response.status, result.error.code);
+  },
+  workerConfigHistory: async (resource: string) =>
+    unwrap(await client.GET("/worker/config/{resource}/history", { params: { path: { resource } } })),
+  workerRestoreVariable: async (resource: string, name: string, body: components["schemas"]["RestoreConfigVariable"]) =>
+    unwrap(await client.POST("/worker/config/{resource}/variables/{name}/restore", { params: { path: { resource, name } }, body })),
   workerJobs: async () => unwrap(await client.GET("/worker/jobs")),
   workerCreate: async (resourceID: string, idempotencyKey: string) =>
     unwrap(

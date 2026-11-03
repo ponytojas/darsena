@@ -16,8 +16,12 @@ import { ServicePanel } from "@/features/definitions/ServicePanel";
 import { createUncertain } from "@/features/definitions/serviceState";
 import { VariableList } from "@/features/definitions/VariableList";
 import { VariableEditor } from "@/features/definitions/VariableEditor";
+import { DefinitionSettings } from "@/features/definitions/DefinitionSettings";
+import { HistoryPanel } from "@/features/definitions/HistoryPanel";
+import { useDefinitionSettings } from "@/features/definitions/useDefinitionSettings";
 import { useDefinitionConfig } from "@/features/definitions/useDefinitionConfig";
 import { useIsolatedService } from "@/features/definitions/useIsolatedService";
+import { useImageCheck } from "@/features/definitions/useImageCheck";
 
 type WorkerApplication = Awaited<ReturnType<typeof api.workerApps>>[number];
 
@@ -28,7 +32,7 @@ export default function DefinitionDetail() {
   const capabilities = useCapabilities();
   const apps = useQuery({ queryKey: ["worker-apps"], queryFn: api.workerApps, enabled: capabilities.workerReady });
   const base = `/apps/definition/${encodeURIComponent(id)}`;
-  if (tab !== undefined && tab !== "variables") return <Navigate to={base} replace />;
+  if (tab !== undefined && tab !== "variables" && tab !== "settings" && tab !== "history") return <Navigate to={base} replace />;
   const back = <Button render={<Link to="/" />}>{t.backHome}</Button>;
   const app = apps.data?.find((item) => item.id === id);
   let body;
@@ -38,11 +42,11 @@ export default function DefinitionDetail() {
   else if (!app && apps.isPending) body = capabilities.workerReady ? <Loading /> : <Blank title={t.definitionsUnavailableTitle} description={d.workerTemporarilyDown} action={<Button variant="outline" onClick={() => void capabilities.refetch()}>{d.refreshStatus}</Button>} />;
   else if (!app && apps.isError) body = <Failure error={apps.error} retry={() => void apps.refetch()} />;
   else if (!app) body = <Blank title={d.notFoundTitle} description={d.notFound} action={back} />;
-  else body = <DefinitionView key={app.id} app={app} tab={tab === "variables" ? "variables" : "summary"} base={base} />;
+  else body = <DefinitionView key={app.id} app={app} tab={tab === "variables" || tab === "settings" || tab === "history" ? tab : "summary"} base={base} />;
   return <div className="page">{body}</div>;
 }
 
-function DefinitionView({ app, tab, base }: { app: WorkerApplication; tab: "summary" | "variables"; base: string }) {
+function DefinitionView({ app, tab, base }: { app: WorkerApplication; tab: "summary" | "variables" | "settings" | "history"; base: string }) {
   const { t } = useI18n();
   const d = t.definitions;
   const navigate = useNavigate();
@@ -55,16 +59,20 @@ function DefinitionView({ app, tab, base }: { app: WorkerApplication; tab: "summ
   const { config, editor, dirty } = cfg;
   const revision = config.data?.revision ?? 0;
   const svc = useIsolatedService(app.id, revision, { available, readable });
+  // Once a service was requested the image is fixed, so its availability no longer matters here.
+  const imageCheck = useImageCheck(app.image, readable && !app.service_used);
   const { service } = svc;
+  const settings = useDefinitionSettings(app, capabilities.workerReady);
+  const guarded = dirty || settings.dirty;
 
   const inside = (pathname: string) => pathname === base || pathname.startsWith(`${base}/`);
-  const blocker = useBlocker(({ nextLocation }) => dirty && !inside(nextLocation.pathname));
+  const blocker = useBlocker(({ nextLocation }) => guarded && !settings.leaving.current && !inside(nextLocation.pathname));
   useEffect(() => {
-    if (!dirty) return;
+    if (!guarded) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
+  }, [guarded]);
   const discardOpen = blocker.state === "blocked" || cfg.discardPending;
   const keepEditing = () => { if (blocker.state === "blocked") blocker.reset(); cfg.keepEditing(); };
   const discard = () => { if (blocker.state === "blocked") blocker.proceed(); else cfg.confirmDiscard(); };
@@ -89,12 +97,12 @@ function DefinitionView({ app, tab, base }: { app: WorkerApplication; tab: "summ
       </div>
       <p className="grid gap-0.5 text-xs text-muted-foreground"><span className="font-mono break-all">{app.image}</span><span>{d.portUnpublished(app.port)}</span></p>
     </header>
-    <DetailTabs label={d.tabsLabel} tabs={[{ to: base, label: d.tabSummary }, { to: `${base}/variables`, label: d.variables }]} />
+    <DetailTabs label={d.tabsLabel} tabs={[{ to: base, label: d.tabSummary }, { to: `${base}/variables`, label: d.variables }, { to: `${base}/settings`, label: d.tabSettings }, { to: `${base}/history`, label: d.tabHistory }]} />
     {statusText && <Alert className="mt-6"><AlertDescription>{statusText}{(!current || (current.worker.configured && !capabilities.workerReady)) && <> <Button variant="link" onClick={() => void capabilities.refetch()}>{d.refreshStatus}</Button></>}</AlertDescription></Alert>}
     {tab === "summary" ? <div className="mt-8 grid gap-8">
       <section aria-labelledby="next-step-title" className="grid gap-3 rounded-lg border border-border p-5">
         <h2 id="next-step-title" className="text-sm font-semibold">{d.nextStep}</h2>
-        <NextStep svc={svc} experimental={experimental} available={available} readable={readable} revision={revision} configReady={!!config.data} onAddVariable={addVariable} />
+        <NextStep svc={svc} experimental={experimental} available={available} readable={readable} revision={revision} configReady={!!config.data} onAddVariable={addVariable} image={imageCheck} onChangeImage={() => void navigate(`${base}/settings`)} />
       </section>
       {readable && <section aria-labelledby="service-title" className="grid gap-3">
         <h2 id="service-title" className="text-sm font-semibold">{d.service.title}</h2>
@@ -104,13 +112,13 @@ function DefinitionView({ app, tab, base }: { app: WorkerApplication; tab: "summ
         <h2 id="config-title" className="font-semibold">{d.configurationLine}</h2>
         <p className="text-muted-foreground">{revisionLine}</p>
       </section>}
-    </div> : <section aria-labelledby="variables-title" className="mt-8">
+    </div> : tab === "settings" ? <DefinitionSettings app={app} settings={settings} /> : tab === "history" ? <HistoryPanel id={app.id} revision={revision} vaultReady={capabilities.vaultReady} experimental={experimental} /> : <section aria-labelledby="variables-title" className="mt-8">
       <div className="flex items-start justify-between gap-4">
-        <div><h2 id="variables-title" className="text-sm font-semibold">{d.variables}</h2>{revisionLine && <p className="worker-intro mt-1">{revisionLine}</p>}</div>
+        <div><h2 id="variables-title" className="text-sm font-semibold">{d.variables}</h2>{revisionLine && <p className="worker-intro pt-1">{revisionLine}</p>}</div>
         {config.data && !editor && <Button disabled={!capabilities.vaultReady} size="sm" onClick={() => cfg.openEditor()}>{d.addVariable}</Button>}
       </div>
-      {!config.data && !capabilities.vaultReady ? <p className="worker-intro my-5">{current?.vault === "disabled" ? d.vaultNotConfigured : d.vaultNotAvailable}</p> : config.isPending ? <Loading /> : config.isError && !config.data ? <Failure error={config.error} retry={() => void config.refetch()} /> : config.data && <>
-        {config.data.variables.length === 0 && !editor && <p className="worker-intro my-5">{d.noVariables}</p>}
+      {!config.data && !capabilities.vaultReady ? <p className="worker-intro py-5">{current?.vault === "disabled" ? d.vaultNotConfigured : d.vaultNotAvailable}</p> : config.isPending ? <Loading /> : config.isError && !config.data ? <Failure error={config.error} retry={() => void config.refetch()} /> : config.data && <>
+        {config.data.variables.length === 0 && !editor && <p className="worker-intro py-5">{d.noVariables}</p>}
         <VariableList variables={config.data.variables} vaultReady={capabilities.vaultReady} confirmDelete={cfg.confirmDelete} deleteConflict={cfg.deleteConflict} remove={cfg.remove} onEdit={cfg.openEditor} onAskDelete={cfg.askDelete} onCancelDelete={cfg.cancelDelete} onConfirmDelete={cfg.confirmDeletion} onRefresh={() => void cfg.refreshConflict(true)} />
         {editor && <VariableEditor editor={editor} setEditor={cfg.setEditor} editorSecret={cfg.editorSecret} matchedVariable={cfg.matchedVariable} savingEditor={cfg.savingEditor} vaultReady={capabilities.vaultReady} conflict={cfg.conflict} save={cfg.save} onSubmit={cfg.submitVariable} onRefresh={() => void cfg.refreshConflict()} onCancel={cfg.cancelEditor} />}
       </>}

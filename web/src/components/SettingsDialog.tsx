@@ -1,11 +1,11 @@
-import { Check } from "lucide-react";
 import { Link } from "react-router";
+import { ColorPicker } from "@/components/ColorPicker";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { locales, useI18n, type Locale } from "@/i18n/context";
-import { accents, type Accent, type Theme } from "@/lib/theme";
+import type { Accent, Theme } from "@/lib/theme";
 
 const categories = ["appearance", "language", "interface", "system"] as const;
 
@@ -74,27 +74,7 @@ export function SettingsPanels({
         <section className="settings-section" aria-labelledby="accent-title">
           <h2 id="accent-title">{t.accentTitle}</h2>
           <p>{t.accentHint}</p>
-          <ToggleGroup
-            aria-label={t.accentTitle}
-            value={[accent]}
-            onValueChange={(values) => {
-              if (values[0]) setAccent(values[0] as Accent);
-            }}
-            className="accent-options"
-          >
-            {accents.map((value) => (
-              <ToggleGroupItem
-                key={value}
-                value={value}
-                aria-label={t.accentLabels[value]}
-                title={t.accentLabels[value]}
-                data-color={value}
-                className="accent-option"
-              >
-                {accent === value && <Check aria-hidden="true" />}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+          <ColorPicker label={t.accentTitle} value={accent} onChange={setAccent} />
           <p className="accent-current" aria-live="polite">
             {t.accentLabels[accent]}
           </p>

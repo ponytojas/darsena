@@ -1,12 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import { violations } from "./axe";
 import { randomUUID } from "node:crypto";
-
-async function violations(page: Page) {
-  // Axe samples colors mid-fade otherwise.
-  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== "running"));
-  return (await new AxeBuilder({ page }).analyze()).violations;
-}
 
 async function startDeployment(page: Page) {
   await page.goto("/apps/new");

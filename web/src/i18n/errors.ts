@@ -7,6 +7,8 @@ type ErrorLike = Error & { status?: number; code?: string };
 /** User-facing text for an error: by code, then by HTTP status. Server and worker text is never shown. */
 export function errorMessage(error: Error | null | undefined, t: Messages): string {
   const { status, code } = (error ?? {}) as ErrorLike;
+  // A stable code is more specific than the client's generic categories.
+  if (code && code in t.apiErrors) return t.apiErrors[code as keyof Messages["apiErrors"]];
   switch (error?.message) {
     case clientErrors.loginFailed:
       return t.loginFailed;
