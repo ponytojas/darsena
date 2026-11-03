@@ -27,6 +27,9 @@ export type PaletteProps = {
   canCreate: boolean;
   /** False until the experimental owner is signed in: the palette then lists no applications. */
   loadApplications: boolean;
+  /** Worker ready (and owner signed in): projects can be created from the palette. */
+  canCreateProject: boolean;
+  onNewProject: () => void;
   setTheme: (theme: Theme) => void;
 };
 
@@ -50,10 +53,18 @@ export function CommandPalette(props: PaletteProps) {
 function AppOptions({ children }: { children: (options: Option[]) => ReactNode }) {
   const { t } = useI18n();
   const navigate = useNavigate();
-  const { items } = useApplications();
+  const { items, projects } = useApplications();
   const options = useMemo<Option[]>(
-    () =>
-      items.map((app) => {
+    () => [
+      ...projects.map((project) => ({
+        id: `project-${project.id}`,
+        group: "go" as const,
+        label: project.name,
+        detail: t.projects.crumb,
+        search: `${project.name} ${t.projects.crumb}`,
+        run: () => void navigate(`/projects/${encodeURIComponent(project.id)}`),
+      })),
+      ...items.map((app) => {
         const kind = app.kind === "example" ? t.kindExample : t.kindDefinition;
         const health = t.healthLabels[app.health];
         return {
@@ -65,7 +76,8 @@ function AppOptions({ children }: { children: (options: Option[]) => ReactNode }
           run: () => void navigate(app.href),
         };
       }),
-    [items, t, navigate],
+    ],
+    [items, projects, t, navigate],
   );
   return <>{children(options)}</>;
 }
@@ -83,6 +95,8 @@ function PaletteList({
   onOpenChange,
   showActivity,
   canCreate,
+  canCreateProject,
+  onNewProject,
   setTheme,
   apps,
 }: PaletteProps & { apps: Option[] }) {
@@ -109,6 +123,14 @@ function PaletteList({
     list.push(...apps);
     if (canCreate)
       list.push({ id: "act-new", group: "actions", label: t.newApp, search: t.newApp, run: go("/apps/new") });
+    if (canCreateProject)
+      list.push({
+        id: "act-new-project",
+        group: "actions",
+        label: t.projects.newProject,
+        search: t.projects.newProject,
+        run: onNewProject,
+      });
     const themes: [Theme, string][] = [
       ["light", t.palette.themeLight],
       ["dark", t.palette.themeDark],
@@ -128,7 +150,7 @@ function PaletteList({
       });
     }
     return list;
-  }, [t, locale, showActivity, canCreate, apps, navigate, setTheme, setLocale]);
+  }, [t, locale, showActivity, canCreate, canCreateProject, onNewProject, apps, navigate, setTheme, setLocale]);
 
   const results = useMemo(() => {
     const needle = normalize(query.trim());

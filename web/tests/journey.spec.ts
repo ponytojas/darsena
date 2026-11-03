@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
+import { violations } from "./axe";
 import { randomUUID } from "node:crypto";
 async function start(page: Page, scenario = "Éxito") {
   const name = `app-${randomUUID().slice(0, 8)}`;
@@ -115,6 +115,17 @@ for (const scenario of ["Fallo de build", "Fallo de salud"]) {
   });
 }
 
+test("example rows summarise the latest deployments for assistive technology", async ({ page }) => {
+  const name = await start(page, "Fallo de build");
+  await page.getByRole("button", { name: "Volver a intentar", exact: true }).click();
+  await expect(page.getByText("Tu aplicación está lista en la demo", { exact: true })).toBeVisible();
+  await page.goto("/");
+  const row = page.locator(".app-row", { hasText: name });
+  await expect(row.locator(".sr-only", { hasText: "Últimos 2 despliegues: 1 correcto, 1 fallido" })).toHaveCount(1);
+  await expect(row.locator(".app-history-dots i")).toHaveCount(2);
+  await expect(row.locator(".app-history-dots")).toHaveAttribute("aria-hidden", "true");
+});
+
 test("disconnect and reconnect recover current server state", async ({
   page,
   request,
@@ -171,7 +182,7 @@ test("form validation, draft restoration and review layout", async ({
     path: info.outputPath("review.png"),
     fullPage: true,
   });
-  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect((await violations(page))).toEqual([]);
 });
 
 test("themes persist, respect system changes and navigation works with keyboard", async ({
@@ -186,10 +197,10 @@ test("themes persist, respect system changes and navigation works with keyboard"
   };
   await openSettings();
   await page.getByRole("button", { name: "Oscuro", exact: true }).click();
-  await page.getByRole("button", { name: "Naranja", exact: true }).click();
+  await page.getByRole("radio", { name: "Naranja", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-accent", "orange");
   await expect(page.locator("html")).toHaveClass(/dark/);
-  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect((await violations(page))).toEqual([]);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Ajustes", exact: true })).toBeFocused();
   await page.reload();
@@ -218,7 +229,7 @@ test("themes persist, respect system changes and navigation works with keyboard"
 test("overview accessibility and recoverable API errors", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("bitacora", { exact: true })).toBeVisible();
-  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect((await violations(page))).toEqual([]);
   await page.route("**/api/v1/applications", (route) =>
     route.fulfill({
       status: 503,
@@ -334,7 +345,7 @@ test("diagnostics reports a missing worker with a copyable command", async ({ pa
   await page.getByRole("button", { name: "Actualizar estado" }).click();
   await expect(page.getByRole("status").filter({ hasText: "Estado actualizado." })).toHaveCount(1);
   await noOverflow(page);
-  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect((await violations(page))).toEqual([]);
   if (isMobile) return;
   await page.goto("/");
   await page.getByRole("link", { name: /Demo · /i }).click();
@@ -426,7 +437,7 @@ test("settings: categories by keyboard and GitHub link preference", async ({ pag
   await page.keyboard.press(isMobile ? "ArrowRight" : "ArrowDown");
   const toggle = page.getByRole("switch", { name: "Mostrar enlace a GitHub" });
   await expect(page.getByRole("tab", { name: "Interfaz", exact: true })).toHaveAttribute("aria-selected", "true");
-  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  expect((await violations(page))).toEqual([]);
   await expect(toggle).toBeChecked();
   await toggle.click();
   await expect(toggle).not.toBeChecked();

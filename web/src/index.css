@@ -81,6 +81,7 @@
   --warning-surface: #f5f7fc;
   --log-bg: #f9fafc;
   --panel-shadow: 0 1px 2px #1b254b06;
+  --scrim: rgb(20 26 40 / 38%);
   --duration: 140ms;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --primary: #345edb;
@@ -122,6 +123,7 @@
   --warning-surface: #1d2432;
   --log-bg: #15181e;
   --panel-shadow: none;
+  --scrim: rgb(0 0 0 / 62%);
   --primary: #a1b8ff;
   --primary-foreground: #172344;
   --ring: var(--primary);
@@ -1174,7 +1176,7 @@ textarea {
   background: var(--swatch);
   color: white;
 }
-.accent-option[aria-pressed="true"] {
+.accent-option[aria-checked="true"] {
   color: var(--foreground);
   background: var(--accent);
   border-color: var(--background);
@@ -1190,7 +1192,7 @@ textarea {
   max-width: 100%;
 }
 .accent-option:hover,
-.accent-option[aria-pressed="true"] {
+.accent-option[aria-checked="true"] {
   background: var(--swatch);
   color: white;
 }
@@ -1198,40 +1200,52 @@ textarea {
   outline: 2px solid var(--foreground);
   outline-offset: 3px;
 }
-.accent-option[data-color="blue"] {
+.accent-option[data-color="blue"],
+.project-swatch[data-color="blue"] {
   --swatch: #345edb;
 }
-.accent-option[data-color="cyan"] {
+.accent-option[data-color="cyan"],
+.project-swatch[data-color="cyan"] {
   --swatch: #087d9d;
 }
-.accent-option[data-color="teal"] {
+.accent-option[data-color="teal"],
+.project-swatch[data-color="teal"] {
   --swatch: #176e6b;
 }
-.accent-option[data-color="green"] {
+.accent-option[data-color="green"],
+.project-swatch[data-color="green"] {
   --swatch: #357c56;
 }
-.accent-option[data-color="lime"] {
+.accent-option[data-color="lime"],
+.project-swatch[data-color="lime"] {
   --swatch: #7b842e;
 }
-.accent-option[data-color="orange"] {
+.accent-option[data-color="orange"],
+.project-swatch[data-color="orange"] {
   --swatch: #c85e0a;
 }
-.accent-option[data-color="rust"] {
+.accent-option[data-color="rust"],
+.project-swatch[data-color="rust"] {
   --swatch: #a34c35;
 }
-.accent-option[data-color="red"] {
+.accent-option[data-color="red"],
+.project-swatch[data-color="red"] {
   --swatch: #b03141;
 }
-.accent-option[data-color="rose"] {
+.accent-option[data-color="rose"],
+.project-swatch[data-color="rose"] {
   --swatch: #a43a6c;
 }
-.accent-option[data-color="violet"] {
+.accent-option[data-color="violet"],
+.project-swatch[data-color="violet"] {
   --swatch: #7151b8;
 }
-.accent-option[data-color="indigo"] {
+.accent-option[data-color="indigo"],
+.project-swatch[data-color="indigo"] {
   --swatch: #4c55b5;
 }
-.accent-option[data-color="slate"] {
+.accent-option[data-color="slate"],
+.project-swatch[data-color="slate"] {
   --swatch: #45596d;
 }
 .settings-section .accent-current {
@@ -1511,5 +1525,94 @@ textarea {
 @media (max-width: 380px) {
   .accent-options {
     grid-template-columns: repeat(4, 44px);
+  }
+}
+.project-swatch {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--swatch);
+}
+
+/* Projects: sidebar section, header actions, dialog */
+.nav-projects {
+  margin-top: 18px;
+}
+.nav-projects nav {
+  gap: 2px;
+}
+.nav-projects .nav-label {
+  padding-bottom: 6px;
+}
+.nav-project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar nav .nav-new-project {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar nav .nav-new-project:hover {
+  color: var(--foreground);
+}
+.sidebar nav .nav-new-project:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.sidebar nav .nav-new-project svg {
+  width: 16px;
+  height: 16px;
+}
+.rail .sidebar nav .nav-new-project {
+  width: 40px;
+  justify-content: center;
+  padding: 8px;
+}
+.project-initial {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: white;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+}
+.project-header-actions,
+.project-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.project-dialog .accent-options {
+  max-width: 100%;
+}
+@media (max-width: 600px) {
+  .sidebar nav .nav-new-project {
+    min-height: 44px;
+  }
+  .project-dialog .accent-options {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    width: 100%;
+  }
+  .project-dialog .accent-option {
+    width: 100%;
   }
 }

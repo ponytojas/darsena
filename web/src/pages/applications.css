@@ -172,6 +172,26 @@
     11px ui-monospace,
     monospace;
 }
+.app-history-dots {
+  display: flex;
+  gap: 3px;
+  padding-top: 3px;
+}
+.app-history-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--muted-foreground);
+}
+.app-history-dots i[data-health="ok"] {
+  background: var(--success, oklch(0.62 0.15 150));
+}
+.app-history-dots i[data-health="progress"] {
+  background: var(--primary);
+}
+.app-history-dots i[data-health="attention"] {
+  background: var(--destructive);
+}
 .app-kind {
   justify-self: start;
 }
@@ -202,7 +222,8 @@
   .apps-header,
   .app-kind,
   .app-row .row-chevron,
-  .app-main small {
+  .app-main small,
+  .app-history-dots {
     display: none;
   }
   .apps-toolbar .search-control {
@@ -242,5 +263,129 @@
   }
   .app-time {
     grid-area: time;
+  }
+}
+.app-note {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* Selection mode */
+.apps-header[data-selecting],
+.app-row[data-selecting] {
+  grid-template-columns: 20px 4px minmax(0, 1fr) 96px 150px 190px 16px;
+}
+.app-row[data-selecting] {
+  cursor: pointer;
+}
+.app-row[data-selecting] .row-chevron {
+  display: none;
+}
+.app-check {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.app-row[data-selecting]:has(input:checked) {
+  background: var(--accent);
+}
+.app-row[data-selecting]:has(input:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  background: var(--accent);
+}
+div.app-row[data-selecting] {
+  /* Dimmed without opacity so the text keeps its contrast. */
+  cursor: not-allowed;
+  background: var(--muted);
+}
+div.app-row[data-selecting] > [data-health] {
+  opacity: 0.4;
+}
+div.app-row[data-selecting] .app-main strong {
+  color: var(--muted-foreground);
+  font-weight: 450;
+}
+div.app-row[data-selecting]:hover {
+  background: var(--muted);
+}
+.apps-selection-bar {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.08);
+}
+.apps-selection-count {
+  margin-right: auto;
+  font-size: 13px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.apps-selection-select {
+  height: 32px;
+  max-width: 100%;
+  padding-inline: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: inherit;
+  font-size: 13px;
+}
+.apps-selection-select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.apps-selection-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--destructive);
+  font-size: 13px;
+}
+@media (max-width: 600px) {
+  .apps-selection-bar {
+    position: fixed;
+    top: auto;
+    inset-inline: 8px;
+    bottom: 8px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  .applications-page:has(.apps-selection-bar) {
+    padding-bottom: 160px;
+  }
+  .apps-selection-count {
+    flex-basis: 100%;
+  }
+  .apps-selection-bar button {
+    flex: 1;
+  }
+  .apps-selection-bar button,
+  .apps-selection-select {
+    min-height: 44px;
+  }
+  .apps-selection-select {
+    flex: 1 1 100%;
+  }
+  .app-row[data-selecting][data-kind] {
+    grid-template-columns: 20px 4px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check stripe main status"
+      "check stripe time time";
+  }
+  .app-row[data-selecting] .app-check {
+    grid-area: check;
+  }
+  .app-row[data-selecting] .app-check {
+    width: 20px;
+    height: 20px;
   }
 }

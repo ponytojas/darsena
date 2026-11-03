@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { expectEnglish } from "./english";
 
 async function openSettings(page: Page, settings: string, openNav: string) {
   const button = page.getByRole("button", { name: settings, exact: true });
@@ -73,26 +74,6 @@ test("a failed simulated deployment shows English error and stage text", async (
   await expect(stages).not.toContainText("Construir imagen");
   await expect(alert).not.toContainText("La construcción");
 });
-
-const SPANISH = /\b(Aplicaciones|Aplicación|Despliegues?|Siguiente|Configuración|Guardar|Actividad|Diagnóstico|Cancelar|Continuar|Resumen|Volver|Buscar|Ajustes|Cerrar)\b/;
-
-/** Visible text of the landmarks, the open dialog and the header; server log lines stay Spanish by design. */
-async function chrome(page: Page) {
-  return page.evaluate(() => {
-    const nodes = document.querySelectorAll("main, nav, header, [role=dialog], [role=alert]");
-    return [...nodes]
-      .map((node) => {
-        const clone = node.cloneNode(true) as HTMLElement;
-        clone.querySelectorAll(".log-section, .log-view").forEach((n) => n.remove());
-        return clone.innerText ?? clone.textContent ?? "";
-      })
-      .join("\n");
-  });
-}
-
-async function expectEnglish(page: Page) {
-  await expect.poll(async () => SPANISH.exec(await chrome(page))?.[0] ?? null).toBeNull();
-}
 
 test("English mode leaves no Spanish text in the main screens", async ({
   page,

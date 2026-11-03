@@ -38,6 +38,7 @@ import {
   X,
   Settings2,
   Search,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,6 +74,9 @@ import { useCapabilities } from "@/lib/capabilities";
 import Applications from "@/pages/Applications";
 import { useApplications } from "@/lib/applications";
 import { CommandPalette } from "@/components/CommandPalette";
+import { ProjectFormDialog } from "@/components/ProjectDialogs";
+import { Toaster } from "@/components/ui/sonner";
+import ProjectPage from "@/pages/Project";
 const NewApp = lazy(() => import("@/pages/NewApp"));
 const ExampleDetail = lazy(() => import("@/pages/ExampleDetail"));
 const OperationDetail = lazy(() => import("@/pages/OperationDetail"));
@@ -138,6 +142,61 @@ function AppCount() {
   const { items, isPending } = useApplications();
   return isPending ? null : <span className="nav-count">{items.length}</span>;
 }
+function ProjectsNav({
+  rail,
+  onNavigate,
+  onNew,
+}: {
+  rail: boolean;
+  onNavigate: () => void;
+  onNew: () => void;
+}) {
+  const { t } = useI18n();
+  const { projects, items } = useApplications();
+  const countOf = (id: string) => items.filter((item) => item.projectId === id).length;
+  return (
+    <div className="nav-projects">
+      <p className="nav-label" hidden={rail}>
+        {t.projects.section}
+      </p>
+      <nav aria-label={t.projects.navLabel}>
+        {projects.map((project) => (
+          <RailTip key={project.id} rail={rail} label={project.name}>
+            <NavLink
+              to={`/projects/${encodeURIComponent(project.id)}`}
+              aria-label={rail ? project.name : undefined}
+              data-testid="project-link"
+              onClick={onNavigate}
+            >
+              {rail ? (
+                <span className="project-initial project-swatch" data-color={project.color} aria-hidden="true">
+                  {[...project.name][0]?.toUpperCase()}
+                </span>
+              ) : (
+                <>
+                  <span className="project-swatch" data-color={project.color} aria-hidden="true" />
+                  <span className="nav-project-name">{project.name}</span>
+                  <span className="nav-count">{countOf(project.id)}</span>
+                </>
+              )}
+            </NavLink>
+          </RailTip>
+        ))}
+        <RailTip rail={rail} label={t.projects.newProject}>
+          <button
+            type="button"
+            className="nav-new-project"
+            aria-label={rail ? t.projects.newProject : undefined}
+            onClick={onNew}
+          >
+            <Plus />
+            {!rail && t.projects.newProject}
+          </button>
+        </RailTip>
+      </nav>
+    </div>
+  );
+}
 function Shell() {
   const { t } = useI18n();
   const capabilities = useCapabilities();
@@ -168,6 +227,7 @@ function Shell() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(
     () => window.matchMedia("(max-width: 600px)").matches,
   );
@@ -283,9 +343,21 @@ function Shell() {
       capabilities.workerReady &&
       (!experimental || signedIn),
   });
+  const projectList = useQuery({
+    queryKey: ["projects"],
+    queryFn: api.workerProjects,
+    enabled:
+      path.startsWith("/projects/") &&
+      capabilities.workerReady &&
+      (!experimental || signedIn),
+  });
   const appName = path.startsWith("/apps/definition/")
     ? definitionApps.data?.find((app) => app.id === crumbParams.id)?.name
-    : exampleApp.data?.name;
+    : path.startsWith("/projects/")
+      ? projectList.data?.find((project) => project.id === crumbParams.id)?.name
+      : exampleApp.data?.name;
+  const projectsAvailable =
+    capabilities.workerReady && (!experimental || signedIn);
   const crumbs = matched.map((crumb) => ({
     label: crumb.label(t, appName),
     to: crumb.to?.({ params: crumbParams }),
@@ -396,6 +468,18 @@ function Shell() {
               </RailTip>
             )}
           </nav>
+          {projectsAvailable && (
+            <ProjectsNav
+              rail={rail}
+              onNavigate={() => {
+                if (isMobile) setMenuOpen(false);
+              }}
+              onNew={() => {
+                if (isMobile) setMenuOpen(false);
+                setNewProjectOpen(true);
+              }}
+            />
+          )}
           <div className="sidebar-bottom">
             <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
               <RailTip rail={rail} label={t.settingsTitle}>
@@ -576,7 +660,22 @@ function Shell() {
             capabilities.data?.mode === "demo" || capabilities.workerReady
           }
           loadApplications={!experimental || signedIn}
+          canCreateProject={projectsAvailable}
+          onNewProject={() => setNewProjectOpen(true)}
           setTheme={setTheme}
+        />
+        {projectsAvailable && (
+          <ProjectFormDialog
+            open={newProjectOpen}
+            onOpenChange={setNewProjectOpen}
+          />
+        )}
+        <Toaster
+          theme={theme}
+          position="bottom-right"
+          duration={10_000}
+          closeButton
+          containerAriaLabel={t.projects.notifications}
         />
       </div>
     </TooltipProvider>
@@ -746,6 +845,13 @@ const router = createBrowserRouter([
         element: <DefinitionDetail />,
         handle: {
           crumb: [appsCrumb, { label: (t, name) => name ?? t.definitionCrumb }],
+        },
+      },
+      {
+        path: "projects/:id",
+        element: <ProjectPage />,
+        handle: {
+          crumb: [appsCrumb, { label: (t, name) => name ?? t.projects.crumb }],
         },
       },
       {
