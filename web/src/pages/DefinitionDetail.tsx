@@ -22,6 +22,7 @@ import { useDefinitionSettings } from "@/features/definitions/useDefinitionSetti
 import { useDefinitionConfig } from "@/features/definitions/useDefinitionConfig";
 import { useIsolatedService } from "@/features/definitions/useIsolatedService";
 import { useImageCheck } from "@/features/definitions/useImageCheck";
+import { imageLabel, shortDigest } from "@/lib/image";
 
 type WorkerApplication = Awaited<ReturnType<typeof api.workerApps>>[number];
 
@@ -58,7 +59,7 @@ function DefinitionView({ app, tab, base }: { app: WorkerApplication; tab: "summ
   const cfg = useDefinitionConfig(app.id, capabilities.vaultReady);
   const { config, editor, dirty } = cfg;
   const revision = config.data?.revision ?? 0;
-  const svc = useIsolatedService(app.id, revision, { available, readable });
+  const svc = useIsolatedService(app.id, { available, readable });
   // Once a service was requested the image is fixed, so its availability no longer matters here.
   const imageCheck = useImageCheck(app.image, readable && !app.service_used);
   const { service } = svc;
@@ -95,14 +96,14 @@ function DefinitionView({ app, tab, base }: { app: WorkerApplication; tab: "summ
         <Badge variant="secondary">{t.kindDefinition}</Badge>
         <Status health={health} label={statusLabel} />
       </div>
-      <p className="grid gap-0.5 text-xs text-muted-foreground"><span className="font-mono break-all">{app.image}</span><span>{d.portUnpublished(app.port)}</span></p>
+      <p className="grid gap-0.5 text-xs text-muted-foreground"><span className="font-mono break-all">{imageLabel(app.image)} <span>· {shortDigest(app.image)}</span></span><span>{d.portUnpublished(app.port)}</span></p>
     </header>
     <DetailTabs label={d.tabsLabel} tabs={[{ to: base, label: d.tabSummary }, { to: `${base}/variables`, label: d.variables }, { to: `${base}/settings`, label: d.tabSettings }, { to: `${base}/history`, label: d.tabHistory }]} />
     {statusText && <Alert className="mt-6"><AlertDescription>{statusText}{(!current || (current.worker.configured && !capabilities.workerReady)) && <> <Button variant="link" onClick={() => void capabilities.refetch()}>{d.refreshStatus}</Button></>}</AlertDescription></Alert>}
     {tab === "summary" ? <div className="mt-8 grid gap-8">
       <section aria-labelledby="next-step-title" className="grid gap-3 rounded-lg border border-border p-5">
         <h2 id="next-step-title" className="text-sm font-semibold">{d.nextStep}</h2>
-        <NextStep svc={svc} experimental={experimental} available={available} readable={readable} revision={revision} configReady={!!config.data} onAddVariable={addVariable} image={imageCheck} onChangeImage={() => void navigate(`${base}/settings`)} />
+        <NextStep app={app} svc={svc} experimental={experimental} available={available} readable={readable} revision={revision} configReady={!!config.data} onAddVariable={addVariable} image={imageCheck} onChangeImage={() => void navigate(`${base}/settings`)} />
       </section>
       {readable && <section aria-labelledby="service-title" className="grid gap-3">
         <h2 id="service-title" className="text-sm font-semibold">{d.service.title}</h2>

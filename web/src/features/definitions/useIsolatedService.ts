@@ -1,47 +1,26 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/api/client";
 import { useI18n } from "@/i18n/context";
-import { readServiceAction, writeServiceAction, removeServiceAction, readServiceAttempt, writeServiceAttempt, removeServiceAttempt } from "@/lib/service-flags";
+import { readServiceAction, writeServiceAction, removeServiceAction, readServiceAttempt, writeServiceAttempt, removeServiceAttempt, rememberExit, lastExit } from "@/lib/service-flags";
 
-const preDispatch = new Set(["revision_conflict_before_dispatch", "image_missing", "image_incompatible", "invalid_image", "runtime_unavailable"]);
-
-export function useIsolatedService(id: string, revision: number, { available, readable }: { available: boolean; readable: boolean }) {
+export function useIsolatedService(id: string, { available, readable }: { available: boolean; readable: boolean }) {
   const cache = useQueryClient();
-  const [acknowledged, setAcknowledged] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [actionUncertain, setActionUncertain] = useState(() => readServiceAction(id));
-  const [revisionConflict, setRevisionConflict] = useState(false);
   const [attempted, setAttempted] = useState(() => readServiceAttempt(id));
   const service = useQuery({ queryKey: ["isolated-service", id], queryFn: () => api.service(id), retry: false, enabled: readable });
   const [noServiceConfirmed, setNoServiceConfirmed] = useState(false);
-  const clearAttempt = () => { setAttempted(false); setAcknowledged(false); removeServiceAttempt(id); };
-  const create = useMutation({ mutationFn: () => api.createService(id, revision), onMutate: () => { setRevisionConflict(false); setNoServiceConfirmed(false); setAttempted(true); writeServiceAttempt(id); }, onError: async (error) => {
-    // Only these codes are rejected before anything is persisted or sent.
-    if (!(error instanceof ApiError) || !error.code || !preDispatch.has(error.code)) return;
-    // A concurrent request may have created the operation even if this request did not dispatch.
-    try { await api.service(id); } catch (lookupError) {
-      if (lookupError instanceof ApiError && lookupError.status === 404) {
-        clearAttempt();
-        if (error.code === "revision_conflict_before_dispatch") {
-          setRevisionConflict(true);
-          void cache.invalidateQueries({ queryKey: ["worker-config", id] });
-        } else void cache.invalidateQueries({ queryKey: ["image-check"] });
-      }
-    }
-  }, onSettled: () => {
-    void cache.invalidateQueries({ queryKey: ["isolated-service", id] });
-    void cache.invalidateQueries({ queryKey: ["worker-apps"] });
-    // Creating without variables saves an empty first revision.
-    if (revision === 0) void cache.invalidateQueries({ queryKey: ["worker-config", id] });
-  } });
+  const clearAttempt = () => { setAttempted(false); removeServiceAttempt(id); };
   const clearActionUncertain = () => { setActionUncertain(false); removeServiceAction(id); };
-  const refresh = useMutation({ mutationFn: () => api.refreshService(id), onSuccess: (result) => { cache.setQueryData(["isolated-service", id], result); clearActionUncertain(); void cache.invalidateQueries({ queryKey: ["worker-apps"] }); } });
+  const refresh = useMutation({ mutationFn: () => api.refreshService(id), onSuccess: (result) => { rememberExit(id, result); cache.setQueryData(["isolated-service", id], result); clearActionUncertain(); void cache.invalidateQueries({ queryKey: ["worker-apps"] }); } });
   const action = useMutation({ mutationFn: ({ kind, version }: { kind: "stop" | "remove"; version: number }) => kind === "stop" ? api.stopService(id, version) : api.removeService(id, version), onMutate: () => { setActionUncertain(true); writeServiceAction(id); setConfirmRemove(false); }, onSuccess: (result) => { cache.setQueryData(["isolated-service", id], result); clearActionUncertain(); void cache.invalidateQueries({ queryKey: ["worker-apps"] }); }, onError: () => { void cache.invalidateQueries({ queryKey: ["isolated-service", id] }); void cache.invalidateQueries({ queryKey: ["worker-apps"] }); } });
   const missing = service.error instanceof ApiError && service.error.status === 404;
   const { t } = useI18n();
-  const stateLabel = (phase: string, observation: string) => (observation ? t.serviceObservationLabels[observation as keyof typeof t.serviceObservationLabels] : t.servicePhaseLabels[phase as keyof typeof t.servicePhaseLabels]) || t.serviceObservationLabels.unknown;
   const state = service.data?.observation || service.data?.phase;
+  // Stopped with no stop action from Dársena means the process ended by itself.
+  const exited = state === "stopped" && !service.data?.action;
+  const stateLabel = (phase: string, observation: string) => (observation === "stopped" && exited ? t.definitions.service.exitedLabel : observation ? t.serviceObservationLabels[observation as keyof typeof t.serviceObservationLabels] : t.servicePhaseLabels[phase as keyof typeof t.servicePhaseLabels]) || t.serviceObservationLabels.unknown;
   const lastAction = service.data?.action;
   const pendingAction = actionUncertain || !!lastAction && (lastAction.phase !== "observed" || !["stopped", "absent"].includes(lastAction.observation) || lastAction.observation !== state);
   const canChange = available && !service.isError && !service.isFetching && !action.isPending && !refresh.isPending && !pendingAction && Number.isSafeInteger(service.data?.version) && service.data!.version! > 0;
@@ -53,7 +32,23 @@ export function useIsolatedService(id: string, revision: number, { available, re
   const query = async () => {
     if (service.data) { refresh.mutate(); return; }
     const result = await service.refetch();
-    if (attempted && result.error instanceof ApiError && result.error.status === 404) { clearAttempt(); create.reset(); setNoServiceConfirmed(true); }
+    if (attempted && result.error instanceof ApiError && result.error.status === 404) { clearAttempt(); setNoServiceConfirmed(true); }
   };
-  return { service, create, refresh, missing, stateLabel, state, pendingAction, canChange, configFetching, attempted, acknowledged, setAcknowledged, confirmRemove, setConfirmRemove, revisionConflict, noServiceConfirmed, stop, confirmRemoval, query: () => void query() };
+  // While a service is alive its state is re-read quietly, so a process that
+  // ends by itself is noticed without asking. Busy or failed reads are ignored.
+  const live = readable && !pendingAction && !refresh.isPending && (state === "running" || state === "created");
+  useEffect(() => {
+    if (!live) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      api.refreshService(id).then((result) => {
+        rememberExit(id, result);
+        cache.setQueryData(["isolated-service", id], result);
+        if (result.observation !== state) void cache.invalidateQueries({ queryKey: ["worker-apps"] });
+      }, () => undefined);
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [live, id, state, cache]);
+  const markAttempted = () => { setAttempted(true); writeServiceAttempt(id); };
+  return { exited, exitCode: service.data?.exit_code ?? lastExit(id), markAttempted, service, refresh, missing, stateLabel, state, pendingAction, canChange, configFetching, attempted, confirmRemove, setConfirmRemove, noServiceConfirmed, stop, confirmRemoval, query: () => void query() };
 }

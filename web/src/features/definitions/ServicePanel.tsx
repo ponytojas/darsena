@@ -14,6 +14,7 @@ export function ServicePanel({ svc }: { svc: IsolatedServiceState }) {
     {service.isPending ? <Loading /> : service.data ? <>
       <dl className="grid gap-1"><div className="flex gap-2"><dt className="text-muted-foreground">{d.serviceRevision}</dt><dd>{service.data.revision}</dd></div></dl>
       {action && <p>{action.kind === "stop" ? s.actionStop : action.kind === "remove" ? s.actionRemove : s.actionOther}: {t.serviceObservationLabels[action.observation] || (action.phase === "dispatched" ? s.resultPending : s.resultUnknown)}</p>}
+      {svc.exited && svc.exitCode !== undefined && <p>{d.deploy.exited(svc.exitCode)}</p>}
       <p className="text-muted-foreground">{s.futureConfig}</p>
     </> : missing ? <p>{s.none}</p> : <p role="alert">{s.queryFailed}</p>}
   </div>;

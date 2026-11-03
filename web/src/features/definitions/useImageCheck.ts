@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type ImageCheck } from "@/api/client";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/api/client";
 import type { Messages } from "@/i18n/es";
 import { errorMessage } from "@/i18n/errors";
 import { isValidImage } from "./validation";
@@ -40,18 +40,9 @@ export function useImageCheck(input: string, enabled: boolean) {
       void cache.invalidateQueries({ queryKey: ["image-check"] });
     previous.current = status;
   }, [status, cache]);
-  const pull = useMutation({
-    mutationFn: (reference: string) => api.workerImagePull(reference),
-    onSuccess: (data) =>
-      cache.setQueryData<ImageCheck>(["image-check", ref], (old) => ({
-        ...old,
-        ...data,
-      })),
-  });
   const current = enabled && ref === typed && typed !== "";
   return {
     check,
-    pull,
     /** The check reflects what is typed now. */
     current,
     /** Waiting for the debounce or the first answer. */

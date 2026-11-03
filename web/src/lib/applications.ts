@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { imageSummary } from "./image";
 import { useQuery } from "@tanstack/react-query";
 import { api, type Operation, type Project } from "@/api/client";
 import { useI18n } from "@/i18n/context";
@@ -98,7 +99,7 @@ export function useApplications() {
         kind: "definition",
         id: app.id,
         name: app.name,
-        subtitle: app.image,
+        subtitle: imageSummary(app.image),
         health: unavailable ? "attention" : definitionHealth(service, uncertain),
         note: unavailable ? t.serviceStateUnavailable : undefined,
         lastChange: configChange && configChange > app.updated_at ? configChange : app.updated_at,

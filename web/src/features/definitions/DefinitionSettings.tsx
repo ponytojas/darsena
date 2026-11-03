@@ -32,8 +32,8 @@ export function DefinitionSettings({ app, settings }: { app: WorkerApplication; 
   const conflict = save.isError && (save.error as { code?: string }).code === "update_conflict";
   const capabilities = useCapabilities();
   const experimental = capabilities.data?.mode === "experimental";
-  const imageCheck = useImageCheck(settings.image, capabilities.workerReady && !locked);
-  const imageInvalid = locked ? "" : imageProblem(settings.image, imageCheck, t);
+  const imageCheck = useImageCheck(settings.image, capabilities.workerReady && !locked && settings.imageChanged);
+  const imageInvalid = locked || !settings.imageChanged ? "" : imageProblem(settings.image, imageCheck, t);
   const imageError = settings.shown ? imageInvalid : "";
   const portError = settings.shown && settings.problems.port ? d.portInvalid : "";
 
@@ -99,15 +99,15 @@ export function DefinitionSettings({ app, settings }: { app: WorkerApplication; 
       <section aria-labelledby={`${ids}-danger`} className="grid gap-3 rounded-lg border border-destructive/40 p-5">
         <h2 id={`${ids}-danger`} className="text-sm font-semibold text-destructive">{s.dangerTitle}</h2>
         <p className="text-sm text-muted-foreground">{s.deleteSummary}</p>
-        {locked && <p id={`${ids}-delete-reason`} className="text-sm">{s.deleteBlocked}</p>}
-        <div><Button variant="destructive" disabled={locked} aria-describedby={locked ? `${ids}-delete-reason` : undefined} onClick={() => setConfirmOpen(true)}>{s.deleteAction}</Button></div>
+        {locked && <p className="text-sm">{s.deleteWithService}</p>}
+        <div><Button variant="destructive" onClick={() => setConfirmOpen(true)}>{s.deleteAction}</Button></div>
       </section>
 
       <Dialog open={confirmOpen} onOpenChange={closeConfirm}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{s.deleteTitle}</DialogTitle>
-            <DialogDescription>{s.deleteDescription(app.name)}</DialogDescription>
+            <DialogDescription>{s.deleteDescription(app.name)}{locked ? ` ${s.deleteWithService}` : ""}</DialogDescription>
           </DialogHeader>
           <Field>
             <FieldLabel htmlFor={`${ids}-confirm`}>{s.typeName(app.name)}</FieldLabel>
