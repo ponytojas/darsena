@@ -84,7 +84,7 @@ var hexA = strings.Repeat("a", 64)
 func TestCheckImageWithoutRuntimeOnlyNormalizes(t *testing.T) {
 	h := newImageHarness(t, false)
 	code, body := h.do("GET", "/image?ref=hello-world:nanoserver@sha256:"+hexA, "")
-	if code != 200 || body["reference"] != "docker.io/library/hello-world@sha256:"+hexA || body["status"] != "not_checked" {
+	if code != 200 || body["reference"] != "docker.io/library/hello-world:nanoserver@sha256:"+hexA || body["status"] != "not_checked" {
 		t.Fatalf("%d %v", code, body)
 	}
 	if code, body = h.do("GET", "/image?ref=nginx:1.27", ""); code != 400 || body["code"] != "image_digest_required" {
@@ -101,7 +101,7 @@ func TestCheckImageWithoutRuntimeOnlyNormalizes(t *testing.T) {
 func TestCheckAndPullImage(t *testing.T) {
 	h := newImageHarness(t, true)
 	code, body := h.do("GET", "/image?ref=nginx:1.27", "")
-	if code != 200 || body["reference"] != "docker.io/library/nginx@sha256:"+strings.Repeat("d", 64) || body["resolved_from"] != "docker.io/library/nginx:1.27" || body["status"] != "available" {
+	if code != 200 || body["reference"] != "docker.io/library/nginx:1.27@sha256:"+strings.Repeat("d", 64) || body["resolved_from"] != "docker.io/library/nginx:1.27" || body["status"] != "available" {
 		t.Fatalf("resolve: %d %v", code, body)
 	}
 	if code, body = h.do("GET", "/image?ref=private/app:1", ""); code != 404 || body["code"] != "image_not_found" {
@@ -220,6 +220,18 @@ func TestCreateServiceChecksImageBeforeDispatch(t *testing.T) {
 		t.Fatal("not dispatched")
 	}
 
+	// A service that exits by itself reports its exit code after a refresh.
+	code := 3
+	h.provider.result.State, h.provider.result.ExitCode = rt.StateStopped, &code
+	if status, body := h.do("POST", path+"/refresh", ""); status != 200 || body["observation"] != "stopped" {
+		t.Fatalf("refresh: %d %v", status, body)
+	}
+	rec := httptest.NewRecorder()
+	h.s.mux.ServeHTTP(rec, httptest.NewRequest("POST", path+"/refresh", nil))
+	if !strings.Contains(rec.Body.String(), `"exit_code":3`) {
+		t.Fatalf("exit code missing: %s", rec.Body)
+	}
+
 	// With variables saved, revision 0 is a conflict before dispatch.
 	other, err := h.s.store.CreateApplication(ctx, "otra", "docker.io/library/hello-world@sha256:"+hexA, 8080)
 	if err != nil {
@@ -239,5 +251,42 @@ func TestCreateServiceChecksImageBeforeDispatch(t *testing.T) {
 	}
 	if code, body := h.do("POST", "/applications/"+legacy.ID+"/service", `{"revision":0,"acknowledge_no_network":true}`); code != 201 && code != 202 {
 		t.Fatalf("legacy image: %d %v", code, body)
+	}
+}
+
+func TestDeleteApplicationOnceItsServiceIsGone(t *testing.T) {
+	ctx := context.Background()
+	h := newImageHarness(t, true)
+	app, err := h.s.store.CreateApplication(ctx, "borrable", "docker.io/library/hello-world@sha256:"+hexA, 8080)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.vault.Set(ctx, app.ID, 0, "TOKEN", "x", true); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := h.do("POST", "/applications/"+app.ID+"/service", `{"revision":1,"acknowledge_no_network":true}`); code != 201 && code != 202 {
+		t.Fatalf("create: %d %v", code, body)
+	}
+	// The container still exists: it has to be removed first.
+	if code, body := h.do("DELETE", "/applications/"+app.ID, ""); code != 409 || body["code"] != "application_has_service" {
+		t.Fatalf("with container: %d %v", code, body)
+	}
+	// The runtime cannot answer: refuse rather than guess.
+	h.provider.result.Ref.ResourceID = "other"
+	h.provider.inspectErr = rt.ErrUnavailable
+	if code, body := h.do("DELETE", "/applications/"+app.ID, ""); code != 409 || body["code"] != "runtime_state_unknown" {
+		t.Fatalf("unknown: %d %v", code, body)
+	}
+	// Once the container is gone the application and its configuration go too.
+	h.provider.inspectErr = nil
+	h.provider.result = rt.Result{}
+	if code, body := h.do("DELETE", "/applications/"+app.ID, ""); code != 204 {
+		t.Fatalf("delete: %d %v", code, body)
+	}
+	if _, err := h.s.store.Application(ctx, app.ID); err == nil {
+		t.Fatal("application still exists")
+	}
+	if snap, err := h.vault.Get(ctx, app.ID); err != nil || snap.Revision != 0 {
+		t.Fatalf("configuration not purged: %+v %v", snap, err)
 	}
 }

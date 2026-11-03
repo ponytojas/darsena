@@ -87,16 +87,22 @@ func (s *Service) checkImage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		out.ResolvedFrom = ref.Tagged()
+		if ref.Tag == "" {
+			ref.Tag = "latest"
+		}
 		ref.Digest = digest
 	}
-	out.Reference = ref.Pinned()
+	// The reference to save keeps the tag for display; availability is about
+	// the pinned image.
+	out.Reference = ref.Canonical()
+	pinned := ref.Pinned()
 	if s.runtime == nil || s.runtime.images == nil {
 		send(w, 200, out)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	status, err := s.runtime.images.ImageStatus(ctx, out.Reference)
+	status, err := s.runtime.images.ImageStatus(ctx, pinned)
 	if err != nil {
 		out.Status = "unknown"
 		send(w, 200, out)
@@ -104,9 +110,9 @@ func (s *Service) checkImage(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Status, out.Reason, out.Platform, out.DaemonPlatform = string(status.State), status.Reason, status.Platform, status.DaemonPlatform
 	if status.State == rt.ImageMissing {
-		if state, reason := s.runtime.pulls.pullState(out.Reference); state != "" {
+		if state, reason := s.runtime.pulls.pullState(pinned); state != "" {
 			out.Status, out.Reason = state, reason
-		} else if ok, platform, err := s.runtime.images.RegistrySupports(ctx, out.Reference); err == nil && !ok {
+		} else if ok, platform, err := s.runtime.images.RegistrySupports(ctx, pinned); err == nil && !ok {
 			// Say so before a download that could only fail.
 			out.Status, out.Reason, out.Platform = string(rt.ImageIncompatible), "platform", platform
 		}
@@ -131,7 +137,7 @@ func (s *Service) pullImage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 	if status, err := s.runtime.images.ImageStatus(ctx, pinned); err == nil && status.State != rt.ImageMissing {
-		send(w, 200, imageResponse{Reference: pinned, Status: string(status.State), Reason: status.Reason, Platform: status.Platform, DaemonPlatform: status.DaemonPlatform})
+		send(w, 200, imageResponse{Reference: ref.Canonical(), Status: string(status.State), Reason: status.Reason, Platform: status.Platform, DaemonPlatform: status.DaemonPlatform})
 		return
 	}
 	p := s.runtime.pulls
@@ -139,7 +145,7 @@ func (s *Service) pullImage(w http.ResponseWriter, r *http.Request) {
 	switch p.active {
 	case pinned:
 		p.mu.Unlock()
-		send(w, 202, imageResponse{Reference: pinned, Status: "pulling"})
+		send(w, 202, imageResponse{Reference: ref.Canonical(), Status: "pulling"})
 		return
 	case "":
 	default:
@@ -167,7 +173,7 @@ func (s *Service) pullImage(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Info("image_pull_completed", "component", "worker")
 	}()
-	send(w, 202, imageResponse{Reference: pinned, Status: "pulling"})
+	send(w, 202, imageResponse{Reference: ref.Canonical(), Status: "pulling"})
 }
 
 func pullReason(err error) string {

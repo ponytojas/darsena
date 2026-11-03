@@ -154,3 +154,18 @@ func TestPull(t *testing.T) {
 		t.Fatalf("silent failure: %v", err)
 	}
 }
+
+func TestInspectReportsExitCodeOnlyWhenStopped(t *testing.T) {
+	ctx := context.Background()
+	e := fake()
+	a := newAdapter(e)
+	got, err := a.Create(ctx, spec())
+	if err != nil || got.ExitCode != nil {
+		t.Fatalf("running: %+v %v", got, err)
+	}
+	e.container["State"] = map[string]any{"Status": "exited", "Running": false, "ExitCode": 3}
+	got, err = a.Inspect(ctx, got.Ref)
+	if err != nil || got.ExitCode == nil || *got.ExitCode != 3 {
+		t.Fatalf("exited: %+v %v", got, err)
+	}
+}

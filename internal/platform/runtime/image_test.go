@@ -32,6 +32,12 @@ func TestParseImage(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
+	if ref, _ := ParseImage("nginx:1.27@" + d); ref.Canonical() != "docker.io/library/nginx:1.27@"+d || ref.Pinned() != "docker.io/library/nginx@"+d {
+		t.Errorf("canonical %q pinned %q", ref.Canonical(), ref.Pinned())
+	}
+	if ref, _ := ParseImage("nginx@" + d); ref.Canonical() != ref.Pinned() {
+		t.Error("canonical without tag")
+	}
 	if (ImageRef{Name: "docker.io/library/nginx"}).Tagged() != "docker.io/library/nginx:latest" {
 		t.Error("default tag")
 	}

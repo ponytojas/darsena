@@ -1223,6 +1223,8 @@ export interface components {
                 /** @enum {string} */
                 observation: "" | "absent" | "created" | "running" | "stopped" | "conflict" | "unavailable" | "unknown";
             };
+            /** @description Exit status of a stopped container; only present in the response to an inspection (refresh), not persisted. */
+            exit_code?: number;
         };
         WorkerProject: {
             id: string;
@@ -1332,7 +1334,7 @@ export interface components {
             from_revision: number;
         };
         ImageCheck: {
-            /** @description Canonical registry/name@sha256:digest form to save. */
+            /** @description Canonical registry/name[:tag]@sha256:digest form to save; the tag is kept for display and the digest decides what runs. */
             reference: string;
             /** @description name:tag resolved to the digest through the public registry (experimental mode only). */
             resolved_from?: string;

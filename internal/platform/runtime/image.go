@@ -83,6 +83,19 @@ func (r ImageRef) Pinned() string {
 	return r.Name + "@" + r.Digest
 }
 
+// Canonical returns name[:tag]@digest: the pinned image plus the tag a person
+// chose, kept for display. The digest decides what runs; use Pinned for the
+// runtime. It returns "" without a digest.
+func (r ImageRef) Canonical() string {
+	if r.Digest == "" {
+		return ""
+	}
+	if r.Tag == "" {
+		return r.Pinned()
+	}
+	return r.Name + ":" + r.Tag + "@" + r.Digest
+}
+
 // Tagged returns name:tag, defaulting to "latest", for registry resolution.
 func (r ImageRef) Tagged() string {
 	if r.Tag == "" {

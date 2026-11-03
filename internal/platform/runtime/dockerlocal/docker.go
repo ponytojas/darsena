@@ -295,8 +295,9 @@ type observed struct {
 	ID    string `json:"Id"`
 	Image string
 	State struct {
-		Status  string
-		Running bool
+		Status   string
+		Running  bool
+		ExitCode int
 	}
 	Config struct {
 		User        string
@@ -413,7 +414,12 @@ func (a *Adapter) inspect(ctx context.Context, r rt.Ref) (observed, rt.Result, e
 	if err != nil {
 		return o, rt.Result{}, err
 	}
-	return o, rt.Result{Ref: r, State: state}, nil
+	result := rt.Result{Ref: r, State: state}
+	if state == rt.StateStopped {
+		code := o.State.ExitCode
+		result.ExitCode = &code
+	}
+	return o, result, nil
 }
 func (a *Adapter) Inspect(ctx context.Context, r rt.Ref) (rt.Result, error) {
 	_, res, err := a.inspect(ctx, r)
