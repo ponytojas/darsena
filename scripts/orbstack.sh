@@ -4,7 +4,7 @@
 # Docker of the Mac and never discovers a daemon socket: the first run needs
 # --docker-socket, which is then kept with the installation.
 #
-#   scripts/orbstack.sh up [--docker-socket PATH] [--no-build]
+#   scripts/orbstack.sh up [--docker-socket PATH] [--no-build] [--apps-port PORT]
 #   scripts/orbstack.sh status | down | logs [-f] | credential
 #
 # Environment: DARSENA_ORB_MACHINE (default darsena-runtime-test),
@@ -15,6 +15,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 MACHINE=${DARSENA_ORB_MACHINE:-darsena-runtime-test}
 PORT=${DARSENA_ORB_PORT:-7320}
+APPS_PORT=7321
 HOME_DIR=${DARSENA_ORB_HOME:-}
 OUT=$ROOT/bin/orbstack
 REMOTE_SRC=$(<"$ROOT/scripts/orbstack-remote.sh")
@@ -31,7 +32,7 @@ usage() {
 [[ $PORT =~ ^[0-9]+$ ]] && ((PORT >= 1024 && PORT <= 65535)) || fail "DARSENA_ORB_PORT must be a port between 1024 and 65535"
 
 remote() {
-	orb -m "$MACHINE" env DARSENA_HOME="$HOME_DIR" DARSENA_PORT="$PORT" bash -c "$REMOTE_SRC" orbstack-remote "$@"
+	orb -m "$MACHINE" env DARSENA_HOME="$HOME_DIR" DARSENA_PORT="$PORT" DARSENA_APPS_PORT="$APPS_PORT" bash -c "$REMOTE_SRC" orbstack-remote "$@"
 }
 
 check_machine() {
@@ -44,10 +45,11 @@ check_machine() {
 
 # check_mac_port fails if a Mac process already listens on the port, because
 # OrbStack could not forward the machine's port to the Mac's localhost.
+# Usage: check_mac_port PORT HOW_TO_CHANGE_IT
 check_mac_port() {
 	local who
-	who=$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -Fc 2>/dev/null | sed -n 's/^c//p' | sort -u | paste -sd, - || true)
-	[[ -z $who ]] || fail "port $PORT is busy on the Mac ($who); stop that process or choose another port with DARSENA_ORB_PORT"
+	who=$(lsof -nP -iTCP:"$1" -sTCP:LISTEN -Fc 2>/dev/null | sed -n 's/^c//p' | sort -u | paste -sd, - || true)
+	[[ -z $who ]] || fail "port $1 is busy on the Mac ($who); stop that process or choose another port with $2"
 }
 
 build() {
@@ -82,12 +84,20 @@ cmd_up() {
 			skip_build=1
 			shift
 			;;
+		--apps-port)
+			(($# >= 2)) || fail "--apps-port needs a port"
+			APPS_PORT=$2
+			shift 2
+			;;
 		*) usage 2 ;;
 		esac
 	done
+	[[ $APPS_PORT =~ ^[0-9]+$ ]] && ((APPS_PORT >= 1024 && APPS_PORT <= 65535)) || fail "--apps-port must be a port between 1024 and 65535"
+	((APPS_PORT != PORT)) || fail "--apps-port must differ from the server port ($PORT)"
 	check_machine
 	remote prepare "$socket"
-	check_mac_port
+	check_mac_port "$PORT" "DARSENA_ORB_PORT"
+	check_mac_port "$APPS_PORT" "--apps-port"
 	if ((!skip_build)); then
 		build
 		echo "copying to $MACHINE…"
