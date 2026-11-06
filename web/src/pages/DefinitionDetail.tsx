@@ -13,6 +13,7 @@ import { definitionHealth } from "@/lib/status";
 import { useI18n } from "@/i18n/context";
 import { NextStep } from "@/features/definitions/NextStep";
 import { ServicePanel } from "@/features/definitions/ServicePanel";
+import { serviceAccess } from "@/features/definitions/serviceAccess";
 import { createUncertain } from "@/features/definitions/serviceState";
 import { VariableList } from "@/features/definitions/VariableList";
 import { VariableEditor } from "@/features/definitions/VariableEditor";
@@ -63,6 +64,7 @@ function DefinitionView({ app, tab, base }: { app: WorkerApplication; tab: "summ
   // Once a service was requested the image is fixed, so its availability no longer matters here.
   const imageCheck = useImageCheck(app.image, readable && !app.service_used);
   const { service } = svc;
+  const where = serviceAccess(app, readable ? service.data : undefined);
   const settings = useDefinitionSettings(app, capabilities.workerReady);
   const guarded = dirty || settings.dirty;
 
@@ -96,7 +98,7 @@ function DefinitionView({ app, tab, base }: { app: WorkerApplication; tab: "summ
         <Badge variant="secondary">{t.kindDefinition}</Badge>
         <Status health={health} label={statusLabel} />
       </div>
-      <p className="grid gap-0.5 text-xs text-muted-foreground"><span className="font-mono break-all">{imageLabel(app.image)} <span>· {shortDigest(app.image)}</span></span><span>{d.portUnpublished(app.port)}</span></p>
+      <p className="grid gap-0.5 text-xs text-muted-foreground"><span className="font-mono break-all">{imageLabel(app.image)} <span>· {shortDigest(app.image)}</span></span><span>{d.access.header[where.access](where.host ?? "", where.internalUrl, app.port)}</span></p>
     </header>
     <DetailTabs label={d.tabsLabel} tabs={[{ to: base, label: d.tabSummary }, { to: `${base}/variables`, label: d.variables }, { to: `${base}/settings`, label: d.tabSettings }, { to: `${base}/history`, label: d.tabHistory }]} />
     {statusText && <Alert className="mt-6"><AlertDescription>{statusText}{(!current || (current.worker.configured && !capabilities.workerReady)) && <> <Button variant="link" onClick={() => void capabilities.refetch()}>{d.refreshStatus}</Button></>}</AlertDescription></Alert>}
@@ -107,7 +109,7 @@ function DefinitionView({ app, tab, base }: { app: WorkerApplication; tab: "summ
       </section>
       {readable && <section aria-labelledby="service-title" className="grid gap-3">
         <h2 id="service-title" className="text-sm font-semibold">{d.service.title}</h2>
-        <ServicePanel svc={svc} />
+        <ServicePanel svc={svc} app={app} />
       </section>}
       {revisionLine && <section aria-labelledby="config-title" className="grid gap-1 text-sm">
         <h2 id="config-title" className="font-semibold">{d.configurationLine}</h2>

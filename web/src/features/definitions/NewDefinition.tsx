@@ -18,9 +18,10 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field";
-import { api } from "@/api/client";
+import { api, ApiError, type Access } from "@/api/client";
 import { useCapabilities } from "@/lib/capabilities";
 import { useI18n } from "@/i18n/context";
+import { AccessFields } from "./AccessFields";
 import { DeployProgress } from "./DeployProgress";
 import { ImageAvailability } from "./ImageAvailability";
 import { imageProblem, useImageCheck } from "./useImageCheck";
@@ -30,12 +31,13 @@ import {
   type ProjectChoice,
   type Variable,
 } from "./useDeploy";
-import { isValidName, isValidPort } from "./validation";
+import { isDomainCode, useDomainCheck, type DomainCode } from "./useDomainCheck";
+import { isValidDomain, isValidName, isValidPort } from "./validation";
 
 const initialPort = "8080";
 const NEW_PROJECT = "__new__";
 const variableName = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-type Field = "name" | "image" | "port" | "project" | `variable-${number}`;
+type Field = "name" | "image" | "port" | "project" | "domain" | `variable-${number}`;
 type Row = Variable & { key: number };
 
 const deployPlan: DeployStep[] = [
@@ -63,7 +65,13 @@ export function NewDefinition() {
   const ids = useId();
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
-  const [port, setPort] = useState(initialPort);
+  const [portChosen, setPortChosen] = useState<string>();
+  const [accessChosen, setAccessChosen] = useState<Access>();
+  const [shared, setShared] = useState(false);
+  const [domainChosen, setDomainChosen] = useState<string>();
+  const [serverDomain, setServerDomain] = useState<{ value: string; code: DomainCode }>();
+  const [suggested, setSuggested] = useState(0);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
   const nextKey = useRef(0);
   const [newProjectName, setNewProjectName] = useState("");
@@ -85,6 +93,13 @@ export function NewDefinition() {
     !!current?.real_execution.enabled &&
     current.real_execution.provider === "ready";
   const imageCheck = useImageCheck(image, configured && ready);
+  // The image's EXPOSE is kept until a newer answer replaces it, so typing does not make the form jump.
+  const exposed = imageCheck.current && imageCheck.check.data ? (imageCheck.check.data.exposed_port ?? 0) : imageCheck.current && imageCheck.check.isError ? 0 : undefined;
+  if (exposed !== undefined && exposed !== suggested) setSuggested(exposed);
+  const suggestion = experimental && suggested ? suggested : undefined;
+  const access: Access = !experimental ? "isolated" : (accessChosen ?? (suggestion ? "local" : "isolated"));
+  const port = portChosen ?? (suggestion ? String(suggestion) : initialPort);
+  const domain = domainChosen ?? name;
   const projects = useQuery({
     queryKey: ["projects"],
     queryFn: api.workerProjects,
@@ -97,7 +112,20 @@ export function NewDefinition() {
     : "";
   const [chosenProject, setChosenProject] = useState<string>();
   const projectValue = chosenProject ?? initialProject;
-  const deploy = useDeploy();
+  // The domain is the one field the server can reject at save time: go back to it with the draft kept.
+  const deploy = useDeploy(undefined, undefined, (step, failure) => {
+    const code = failure instanceof ApiError ? failure.code : undefined;
+    if (step !== "save" || !isDomainCode(code) || access !== "local") return false;
+    setServerDomain({ value: domain, code });
+    setShown(true);
+    setFocusField({ field: "domain" });
+    return true;
+  });
+  const appsPort = capabilities.data?.apps_port;
+  const a = d.access;
+  // A name that is not valid yet is already reported on its own field.
+  const domainVisible = access === "local" && (domainChosen !== undefined || isValidName(name));
+  const domainCheck = useDomainCheck(domain, domainVisible && ready);
   const started = deploy.steps.some((step) => step.state === "done");
   const locked = deploy.running || started;
 
@@ -106,6 +134,15 @@ export function NewDefinition() {
     name: isValidName(name) ? "" : d.nameInvalid,
     image: imageProblem(image, imageCheck, t),
     port: isValidPort(port) ? "" : d.portInvalid,
+    domain: !domainVisible
+      ? ""
+      : !isValidDomain(domain)
+        ? a.domainInvalid
+        : domainCheck
+          ? t.apiErrors[domainCheck]
+          : serverDomain?.value === domain
+            ? t.apiErrors[serverDomain.code]
+            : "",
     project:
       projectValue === NEW_PROJECT && !/^.{1,40}$/u.test(newProjectName.trim())
         ? x.newProjectInvalid
@@ -120,11 +157,16 @@ export function NewDefinition() {
         : "";
   });
   const error = (field: Field) => (shown ? (problems[field] ?? "") : "");
+  // Availability answers appear while typing; format problems wait until the field is touched or sent.
+  const domainError = shown || domainChosen !== undefined || domainCheck || serverDomain?.value === domain ? (problems.domain ?? "") : "";
 
   const dirty =
     (name !== "" ||
       image !== "" ||
       port !== initialPort ||
+      access !== "isolated" ||
+      shared ||
+      domainChosen !== undefined ||
       rows.length > 0 ||
       projectValue !== initialProject) &&
     !deploy.finished;
@@ -163,6 +205,9 @@ export function NewDefinition() {
       image,
       port: Number(port),
       project,
+      access,
+      shared: access !== "isolated" && shared,
+      domain,
       variables: rows.map(({ name, value, secret }) => ({
         name: name.trim(),
         value,
@@ -385,11 +430,33 @@ export function NewDefinition() {
                 </div>
               </fieldset>
 
-              <details className="group text-sm" open={!!error("port")}>
+              <details
+                className="group text-sm"
+                open={moreOpen || access !== "isolated" || !!error("port")}
+                onToggle={(event) => setMoreOpen(event.currentTarget.open)}
+              >
                 <summary className="cursor-pointer font-medium">
                   {x.moreOptions}
                 </summary>
-                <Field data-invalid={!!error("port")} className="mt-3">
+                <div className="mt-3 grid gap-4">
+                {experimental && (
+                  <AccessFields
+                    ids={ids}
+                    access={access}
+                    onAccess={setAccessChosen}
+                    shared={shared}
+                    onShared={setShared}
+                    domain={domain}
+                    onDomain={(value) => {
+                      setDomainChosen(value);
+                      setServerDomain(undefined);
+                    }}
+                    domainError={domainError}
+                    appsPort={appsPort}
+                    suggestedPort={accessChosen === undefined ? suggestion : undefined}
+                  />
+                )}
+                <Field data-invalid={!!error("port")}>
                   <FieldLabel htmlFor={`${ids}-port`}>{d.port}</FieldLabel>
                   <Input
                     id={`${ids}-port`}
@@ -399,16 +466,17 @@ export function NewDefinition() {
                     max={65535}
                     value={port}
                     aria-invalid={!!error("port")}
-                    onChange={(e) => setPort(e.target.value)}
+                    onChange={(e) => setPortChosen(e.target.value)}
                   />
-                  <FieldDescription>{d.service.intro}</FieldDescription>
+                  <FieldDescription>{a.portHint[access === "isolated" ? "isolated" : "network"]}</FieldDescription>
                   {error("port") && <FieldError>{error("port")}</FieldError>}
                 </Field>
+                </div>
               </details>
 
               {!ready && <p>{d.workerTemporarilyDown}</p>}
-              {canDeploy && (
-                <p className="text-sm text-muted-foreground">{x.isolation}</p>
+              {canDeploy && access === "isolated" && (
+                <p className="text-sm text-muted-foreground">{a.willRun.isolated}</p>
               )}
               {!locked && (
                 <div className="flex flex-wrap gap-2">

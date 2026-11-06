@@ -9,6 +9,8 @@ import { useI18n } from "@/i18n/context";
 import { errorMessage } from "@/i18n/errors";
 import type { api } from "@/api/client";
 import { useCapabilities } from "@/lib/capabilities";
+import { AccessFields } from "./AccessFields";
+import { isDomainCode, useDomainCheck } from "./useDomainCheck";
 import { ImageAvailability } from "./ImageAvailability";
 import { imageProblem, useImageCheck } from "./useImageCheck";
 import type { DefinitionSettings as Settings } from "./useDefinitionSettings";
@@ -35,16 +37,29 @@ export function DefinitionSettings({ app, settings }: { app: WorkerApplication; 
   const imageCheck = useImageCheck(settings.image, capabilities.workerReady && !locked && settings.imageChanged);
   const imageInvalid = locked || !settings.imageChanged ? "" : imageProblem(settings.image, imageCheck, t);
   const imageError = settings.shown ? imageInvalid : "";
+  const appsPort = capabilities.data?.apps_port;
+  const networkLocked = locked && experimental;
+  const saveCode = save.isError ? (save.error as { code?: string }).code : undefined;
+  const domainCheck = useDomainCheck(settings.domain, experimental && !locked && settings.access === "local" && settings.networkChanged);
+  const domainSaveError = isDomainCode(saveCode) ? saveCode : undefined;
+  const domainCode = domainCheck ?? domainSaveError;
+  const domainError = settings.access !== "local" || locked ? "" : settings.shown && settings.problems.domain ? d.access.domainInvalid : domainCode ? t.apiErrors[domainCode] : "";
+  const portLocked = locked && settings.access !== "isolated";
   const portError = settings.shown && settings.problems.port ? d.portInvalid : "";
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (imageInvalid || settings.problems.port) {
+    const first = imageInvalid ? "image" : settings.problems.port ? "port" : settings.problems.domain || domainCheck ? "domain" : "";
+    if (first) {
       settings.showProblems();
-      document.getElementById(`${ids}-${imageInvalid ? "image" : "port"}`)?.focus();
+      document.getElementById(`${ids}-${first}`)?.focus();
       return;
     }
-    save.mutate(locked ? undefined : imageCheck.resolved, { onSuccess: () => toast.success(s.saved) });
+    save.mutate(locked ? undefined : imageCheck.resolved, {
+      onSuccess: () => toast.success(s.saved),
+      // A refused domain is the person's to fix on its field.
+      onError: (error) => { if (isDomainCode((error as { code?: string }).code)) document.getElementById(`${ids}-domain`)?.focus(); },
+    });
   };
   const changeProject = (value: string) =>
     assign.mutate(value || null, { onSuccess: () => toast.success(value ? s.projectMoved : s.projectCleared) });
@@ -65,13 +80,14 @@ export function DefinitionSettings({ app, settings }: { app: WorkerApplication; 
             {(projects.data ?? []).map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
           <FieldDescription>{s.projectHint}</FieldDescription>
+          {experimental && app.access !== "isolated" && app.service_used && <FieldDescription>{s.projectNetworkFixed}</FieldDescription>}
           {(assign.isError || projects.isError) && <p role="alert" className="worker-error">{errorMessage((assign.error ?? projects.error) as Error, t)}</p>}
         </Field>
       </section>
 
       <section aria-labelledby={`${ids}-image-title`}>
         <h2 id={`${ids}-image-title`} className="text-sm font-semibold">{s.imageTitle}</h2>
-        <p className="pt-1 pb-4 text-sm text-muted-foreground">{s.futureOnly} {s.portMetadata}</p>
+        <p className="pt-1 pb-4 text-sm text-muted-foreground">{s.futureOnly}</p>
         <form onSubmit={submit} noValidate>
           <FieldGroup>
             <Field data-invalid={!!imageError}>
@@ -83,10 +99,12 @@ export function DefinitionSettings({ app, settings }: { app: WorkerApplication; 
             </Field>
             <Field data-invalid={!!portError}>
               <FieldLabel htmlFor={`${ids}-port`}>{d.port}</FieldLabel>
-              <Input id={`${ids}-port`} type="number" inputMode="numeric" min={1} max={65535} value={settings.port} aria-invalid={!!portError} onChange={(event) => settings.setPort(event.target.value)} />
+              <Input id={`${ids}-port`} type="number" inputMode="numeric" min={1} max={65535} value={settings.port} disabled={portLocked} aria-invalid={!!portError} aria-describedby={`${ids}-port-help`} onChange={(event) => settings.setPort(event.target.value)} />
+              <FieldDescription id={`${ids}-port-help`}>{portLocked ? s.portLocked : d.access.portHint[settings.access === "isolated" ? "isolated" : "network"]}</FieldDescription>
               {portError && <FieldError>{portError}</FieldError>}
             </Field>
-            {save.isError && <div role="alert" className="worker-error grid justify-items-start gap-2">
+            {experimental && <AccessFields ids={ids} access={settings.access} onAccess={settings.setAccess} shared={settings.shared} onShared={settings.setShared} domain={settings.domain} onDomain={settings.setDomain} domainError={domainError} appsPort={appsPort} disabled={networkLocked} lockedNote={networkLocked ? s.accessLocked : undefined} />}
+            {save.isError && !domainSaveError && <div role="alert" className="worker-error grid justify-items-start gap-2">
               <p>{errorMessage(save.error, t)}</p>
               {conflict && <Button type="button" variant="outline" size="sm" disabled={reload.isPending} onClick={() => reload.mutate()}>{s.reload}</Button>}
             </div>}

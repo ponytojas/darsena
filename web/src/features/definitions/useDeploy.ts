@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useI18n } from "@/i18n/context";
 import { errorMessage } from "@/i18n/errors";
-import { api, ApiError, type ImageCheck, type Project } from "@/api/client";
+import { api, ApiError, type Access, type ImageCheck, type Project } from "@/api/client";
 import { accents } from "@/lib/theme";
 import { rememberExit, removeServiceAttempt, writeServiceAttempt } from "@/lib/service-flags";
 
@@ -23,6 +23,10 @@ export type DeployInput = {
   project: ProjectChoice;
   variables: Variable[];
   projects: Project[];
+  /** Network access; omitted (isolated) sends nothing, as before. */
+  access?: Access;
+  shared?: boolean;
+  domain?: string;
   /** Configuration revision the person saw, for an application that already exists. */
   revision?: number;
 };
@@ -53,6 +57,10 @@ const preDispatch = new Set([
   "image_incompatible",
   "invalid_image",
   "runtime_unavailable",
+  // Networks and the domain are ensured before the single send is claimed.
+  "network_unavailable",
+  "network_conflict",
+  "invalid_domain",
 ]);
 const PULL_LIMIT_MS = 11 * 60_000;
 const START_LIMIT_MS = 20_000;
@@ -70,7 +78,10 @@ class StepError extends Error {
  * already created is kept and skipped on retry. Safety checks are steps of
  * the action, not extra work for the person.
  */
-export function useDeploy(initial?: { appId: string; revision: number }, onServiceUncertain?: () => void) {
+export function useDeploy(initial?: { appId: string; revision: number }, onServiceUncertain?: () => void,
+  /** Returns true when the person must first fix a form field: the list is cleared, what was created is kept. */
+  onFailure?: (step: DeployStep, error: unknown) => boolean,
+) {
   const cache = useQueryClient();
   const { t } = useI18n();
   const progress = useRef<Progress>({
@@ -144,6 +155,9 @@ export function useDeploy(initial?: { appId: string; revision: number }, onServi
               name: input.name,
               image: p.check?.reference ?? input.image.trim(),
               port: input.port,
+              ...(input.access && input.access !== "isolated"
+                ? { access: input.access, shared_network: !!input.shared, ...(input.access === "local" ? { domain: input.domain } : {}) }
+                : {}),
             })
           ).id;
           void cache.invalidateQueries({ queryKey: ["worker-apps"] });
@@ -249,6 +263,11 @@ export function useDeploy(initial?: { appId: string; revision: number }, onServi
       try {
         mark(step, await perform(step, input));
       } catch (error) {
+        if (onFailure?.(step, error)) {
+          setSteps([]);
+          setRunning(false);
+          return undefined;
+        }
         mark(step, "failed");
         setFailure({
           step,

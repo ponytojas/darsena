@@ -6,10 +6,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ArrowUpRight } from "lucide-react";
 import { Loading } from "@/components/shared";
+import type { Access } from "@/api/client";
+import { useCapabilities } from "@/lib/capabilities";
 import { useI18n } from "@/i18n/context";
 import { DeployProgress } from "./DeployProgress";
 import { ImageAvailability } from "./ImageAvailability";
+import { serviceAccess } from "./serviceAccess";
 import { createUncertain, type IsolatedServiceState } from "./serviceState";
 import { useDeploy, type DeployStep } from "./useDeploy";
 import type { ImageCheckState } from "./useImageCheck";
@@ -33,7 +37,7 @@ export function NextStep({
   onAddVariable,
   onChangeImage,
 }: {
-  app: { id: string; name: string; image: string; port: number };
+  app: { id: string; name: string; image: string; port: number; access: Access; domain: string | null };
   image: ImageCheckState;
   onChangeImage: () => void;
   svc: IsolatedServiceState;
@@ -48,6 +52,7 @@ export function NextStep({
   const d = t.definitions;
   const s = d.service;
   const x = d.deploy;
+  const appsPort = useCapabilities().data?.apps_port;
   const deploy = useDeploy({ appId: app.id, revision }, svc.markAttempted);
   const {
     service,
@@ -96,6 +101,8 @@ export function NextStep({
       revision,
     });
   };
+  const where = serviceAccess(app, service.data, appsPort);
+  const running = state === "running";
   const incompatible = image.check.data?.status === "incompatible";
   return (
     <div className="grid justify-items-start gap-3">
@@ -107,8 +114,16 @@ export function NextStep({
           </>
         ) : (
           <div className="flex flex-wrap items-center gap-2">
+            {running && where.openUrl && (
+              <Button
+                render={<a href={where.openUrl} target="_blank" rel="noopener noreferrer" />}
+              >
+                {d.access.open}
+                <ArrowUpRight data-icon="inline-end" aria-hidden />
+              </Button>
+            )}
             {canChange && state === "running" && (
-              <Button onClick={stop}>{s.stop}</Button>
+              <Button variant={where.openUrl ? "outline" : "default"} onClick={stop}>{s.stop}</Button>
             )}
             {canChange && (state === "stopped" || state === "created") && (
               <Button onClick={() => setConfirmRemove(true)}>{s.remove}</Button>
@@ -140,7 +155,7 @@ export function NextStep({
           <>
             {noServiceConfirmed && <p role="status">{s.noServiceAfterQuery}</p>}
             <p className="text-sm text-muted-foreground">
-              {x.startDescription} {x.isolation}
+              {x.startDescription} {d.access.willRun[app.access]}
               {configReady && revision === 0 ? ` ${s.noVariables}` : ""}
             </p>
             {!deploy.steps.length && (
@@ -158,6 +173,9 @@ export function NextStep({
         )
       ) : (
         queryButton(true)
+      )}
+      {service.data && !pendingAction && running && where.host && !appsPort && (
+        <p className="text-sm text-muted-foreground">{d.access.listenerOff(where.host)}</p>
       )}
       {refresh.isError && <p role="alert">{s.refreshFailed}</p>}
       <Dialog open={confirmRemove} onOpenChange={setConfirmRemove}>

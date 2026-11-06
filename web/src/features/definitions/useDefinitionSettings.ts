@@ -1,12 +1,12 @@
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "@/api/client";
+import { api, ApiError, type Access } from "@/api/client";
 import { imageInput } from "@/lib/image";
-import { isValidPort } from "./validation";
+import { isValidDomain, isValidPort } from "./validation";
 
 type WorkerApplication = Awaited<ReturnType<typeof api.workerApps>>[number];
-type Base = { version: number; image: string; saved: string; port: string };
-const snapshot = (app: WorkerApplication): Base => ({ version: app.version, image: imageInput(app.image), saved: app.image, port: String(app.port) });
+type Base = { version: number; image: string; saved: string; port: string; access: Access; shared: boolean; domain: string };
+const snapshot = (app: WorkerApplication): Base => ({ version: app.version, image: imageInput(app.image), saved: app.image, port: String(app.port), access: app.access, shared: app.shared_network, domain: app.domain ?? app.name });
 
 /** Draft of the image and port form. The version it was loaded at is kept so a concurrent change is reported, never overwritten. */
 export function useDefinitionSettings(app: WorkerApplication, enabled: boolean) {
@@ -14,6 +14,9 @@ export function useDefinitionSettings(app: WorkerApplication, enabled: boolean) 
   const [base, setBase] = useState(() => snapshot(app));
   const [image, setImage] = useState(base.image);
   const [port, setPort] = useState(base.port);
+  const [access, setAccessState] = useState<Access>(base.access);
+  const [shared, setSharedState] = useState(base.shared);
+  const [domain, setDomainState] = useState(base.domain);
   const [shown, setShown] = useState(false);
   const leaving = useRef(false);
   const projects = useQuery({ queryKey: ["projects"], queryFn: api.workerProjects, enabled });
@@ -23,19 +26,29 @@ export function useDefinitionSettings(app: WorkerApplication, enabled: boolean) 
     setBase(fresh);
     setImage(fresh.image);
     setPort(fresh.port);
+    setAccessState(fresh.access);
+    setSharedState(fresh.shared);
+    setDomainState(fresh.domain);
     setShown(false);
   };
-  const dirty = image !== base.image || port !== base.port;
-  const problems = { port: isValidPort(port) ? "" : "port" } as const;
+  // A service fixes access, network and domain at deployment: they are neither edited nor sent.
+  const fixed = app.service_used;
+  const networkChanged = !fixed && (access !== base.access || (access !== "isolated" && shared !== base.shared) || (access === "local" && domain !== base.domain));
+  const dirty = image !== base.image || port !== base.port || networkChanged;
+  const problems = { port: isValidPort(port) ? "" : "port", domain: access === "local" && networkChanged && !isValidDomain(domain) ? "domain" : "" } as const;
 
   const save = useMutation({
     // The caller passes the canonical reference from the image check when known.
     // An untouched image is sent exactly as saved, so a moving tag never re-pins it.
-    mutationFn: (resolved?: string) => api.workerAppUpdate(app.id, { version: base.version, image: image === base.image ? base.saved : (resolved ?? image.trim()), port: Number(port) }),
+    mutationFn: (resolved?: string) => api.workerAppUpdate(app.id, { version: base.version, image: image === base.image ? base.saved : (resolved ?? image.trim()), port: Number(port),
+      // Sent together or not at all: omitted fields keep what is stored.
+      ...(networkChanged ? { access, shared_network: access !== "isolated" && shared, ...(access === "local" ? { domain } : {}) } : {}) }),
     onSuccess: (updated) => {
       load(updated as WorkerApplication);
       void cache.invalidateQueries({ queryKey: ["worker-apps"] });
     },
+    // The application turned out to have a service: re-read it so the fields lock.
+    onError: (error) => { if (error instanceof ApiError && error.code === "access_locked") void cache.invalidateQueries({ queryKey: ["worker-apps"] }); },
   });
   const reload = useMutation({
     mutationFn: () => cache.fetchQuery({ queryKey: ["worker-apps"], queryFn: api.workerApps, staleTime: 0 }),
@@ -71,9 +84,12 @@ export function useDefinitionSettings(app: WorkerApplication, enabled: boolean) 
   });
 
   return {
-    image, port, shown, dirty, problems, imageChanged: image !== base.image, projects, save, reload, assign, remove, leaving,
+    image, port, access, shared, domain, networkChanged, shown, dirty, problems, imageChanged: image !== base.image, projects, save, reload, assign, remove, leaving,
     setImage: (value: string) => { setImage(value); save.reset(); },
     setPort: (value: string) => { setPort(value); save.reset(); },
+    setAccess: (value: Access) => { setAccessState(value); if (value === "isolated") setSharedState(false); save.reset(); },
+    setShared: (value: boolean) => { setSharedState(value); save.reset(); },
+    setDomain: (value: string) => { setDomainState(value); save.reset(); },
     showProblems: () => setShown(true),
   };
 }
