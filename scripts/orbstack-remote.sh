@@ -10,6 +10,7 @@ umask 077
 
 BASE=${DARSENA_HOME:-$HOME/darsena}
 PORT=${DARSENA_PORT:-7320}
+APPS_PORT=${DARSENA_APPS_PORT:-7321}
 APP=$BASE/app
 DATA=$BASE/data
 RUN=$BASE/run
@@ -56,6 +57,9 @@ listening() { ss -xlnH | awk '{print $5}' | grep -qxF "$1"; }
 check_machine_port() {
 	if [[ -n $(ss -tlnH "sport = :$PORT") ]]; then
 		fail "port $PORT is busy in the machine; choose another with DARSENA_ORB_PORT or check it with: ss -tlnp 'sport = :$PORT'"
+	fi
+	if [[ -n $(ss -tlnH "sport = :$APPS_PORT") ]]; then
+		fail "port $APPS_PORT is busy in the machine; choose another with --apps-port or check it with: ss -tlnp 'sport = :$APPS_PORT'"
 	fi
 }
 
@@ -192,11 +196,12 @@ cmd_start() {
 		--property=UMask=0077 --property=TimeoutStopSec=10 \
 		--property=StandardOutput="append:$LOG/server.log" --property=StandardError="append:$LOG/server.log" \
 		"$APP/darsena" serve --experimental --installation "$installation" \
-		--addr "127.0.0.1:$PORT" --origin "$ORIGIN" --web "$APP/web" \
+		--addr "127.0.0.1:$PORT" --apps-addr "127.0.0.1:$APPS_PORT" --origin "$ORIGIN" --web "$APP/web" \
 		--worker-socket "$SOCK" --owner-credential "$DATA/owner.credential"
 	for _ in $(seq 50); do
 		if curl -fs --max-time 1 -o /dev/null "$ORIGIN/api/v1/health/live"; then
 			printf '%s\n' "$ORIGIN" >"$RUN/origin"
+			printf '%s\n' "$APPS_PORT" >"$RUN/apps-port"
 			return 0
 		fi
 		active "$SERVER" || break
@@ -237,6 +242,8 @@ cmd_status() {
 	if [[ $s == active ]]; then
 		[[ -f $RUN/origin ]] && ORIGIN=$(<"$RUN/origin")
 		echo "url:        $ORIGIN"
+		[[ -f $RUN/apps-port ]] && APPS_PORT=$(<"$RUN/apps-port")
+		echo "apps:       http://<domain>.localhost:$APPS_PORT"
 		summary
 	fi
 	[[ -f $DATA/owner.credential ]] && echo "credential: $DATA/owner.credential"
@@ -250,6 +257,7 @@ cmd_started() {
 	echo
 	echo "Dársena is running in experimental mode"
 	echo "url:        $ORIGIN"
+	echo "apps:       http://<domain>.localhost:$APPS_PORT"
 	summary
 	echo "credential: $DATA/owner.credential (in the machine)"
 	echo "data:       $DATA"
