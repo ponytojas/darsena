@@ -43,6 +43,10 @@ Liveness is independent of dependency readiness. Readiness performs bounded sche
 
 [runtime.md](runtime.md) describes the proposed isolation, recovery, and ownership requirements for a first local provider. The provider-neutral contract, experimental Docker adapter, durable intent store, execution coordinator and read-only recovery are disconnected from startup, the worker and HTTP. Tests use doubles and a simulated Engine; the adapter has not been verified against a real rootless Linux daemon or enabled. Its version 3 policy accepts certain optional collections omitted by the Engine API, while requiring explicit safety-critical controls. A demo remains a simulation, regardless of whether a daemon exists on the host.
 
+## Experimental application proxy
+
+With `--apps-addr` (`DARSENA_APPS_ADDR`), the server opens a second listener, off by default and restricted to loopback. It routes `<domain>.localhost` by exact `Host` match to the loopback port Docker published for a `local` application. It shares no handler, session or cookie with the API. The worker serves `GET /routes/{domain}` only on its private socket; the browser cannot reach it. Other hosts and stopped services get proxy error pages without internal data. The proxy adds no authentication to applications, and it does not reach container addresses directly.
+
 ## Experimental offline backup
 
 `cmd/darsena-backup` snapshots the job state and optionally the encrypted vault and runtime intentions into a new private directory. It acquires the worker's state lock and uses SQLite snapshots that include committed WAL contents; restoration checks the manifest, hashes, integrity and primary schema fields (state database at schema version 2 or 3, vault at 0 or 1) before writing to a new directory. All users of every included database must remain stopped throughout: the worker lock does not protect independent vault or intent users, and snapshots of different databases are not one atomic transaction. The age identity is held separately. Checksums detect accidental corruption, not a maliciously modified manifest. The procedure and its limitations are in [operations.md](operations.md).
