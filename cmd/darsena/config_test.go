@@ -231,7 +231,7 @@ func TestExperimentalModeRequiresExclusiveCompleteConfiguration(t *testing.T) {
 }
 
 func TestAgeInitCreatesPrivateIdentityWithoutOverwriting(t *testing.T) {
-	dir, err := filepath.EvalSymlinks(t.TempDir())
+	dir, err := filepath.EvalSymlinks(privateTestDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,4 +317,21 @@ func TestAppsAddrIsExperimentalLoopbackOnly(t *testing.T) {
 	} else if strings.Contains(err.Error(), "0.0.0.0") {
 		t.Fatal("value echoed")
 	}
+}
+
+// privateTestDir returns a directory under the home directory. The system temp
+// directory can be shared and writable by others, as /tmp is on Linux, and the
+// private path checks rightly refuse any path below it.
+func privateTestDir(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(home, ".darsena-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
 }
