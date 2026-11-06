@@ -23,6 +23,8 @@ type capabilitiesResponse struct {
 	} `json:"worker"`
 	State string `json:"state"`
 	Vault string `json:"vault"`
+	// AppsPort is the port of the application listener, only when enabled.
+	AppsPort int `json:"apps_port,omitempty"`
 }
 
 type workerReadiness struct {
@@ -43,6 +45,7 @@ func (a API) capabilities(w http.ResponseWriter, r *http.Request) {
 		out.RealExecution.Enabled = true
 		out.RealExecution.Provider = "unavailable"
 		out.RealExecution.Configuration = "accepted_revision"
+		out.AppsPort = a.AppsPort
 	}
 	if a.WorkerSocket != "" {
 		out.Worker.Configured = true

@@ -33,6 +33,14 @@ type engine struct {
 	failStart          bool
 	posts              int
 	startCalls         int
+	// Policy v4.
+	imageUser    string
+	exposed      []string
+	networks     map[string]map[string]any
+	netPosts     int
+	netExhausted bool
+	netRace      bool
+	lastCreate   map[string]any
 }
 
 func (e *engine) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -57,7 +65,35 @@ func (e *engine) RoundTrip(req *http.Request) (*http.Response, error) {
 		if e.volumes {
 			volumes["/data"] = map[string]any{}
 		}
-		return response(200, map[string]any{"Id": e.image, "Config": map[string]any{"Volumes": volumes}})
+		exposed := map[string]any{}
+		for _, p := range e.exposed {
+			exposed[p] = map[string]any{}
+		}
+		return response(200, map[string]any{"Id": e.image, "Config": map[string]any{"Volumes": volumes, "User": e.imageUser, "ExposedPorts": exposed}})
+	case req.Method == "GET" && strings.HasPrefix(req.URL.Path, api+"/networks/"):
+		n, ok := e.networks[strings.TrimPrefix(req.URL.Path, api+"/networks/")]
+		if !ok {
+			return response(404, map[string]any{"message": "SENSITIVE"})
+		}
+		return response(200, n)
+	case req.Method == "POST" && req.URL.Path == api+"/networks/create":
+		e.netPosts++
+		var body map[string]any
+		if json.NewDecoder(req.Body).Decode(&body) != nil {
+			panic("bad network create")
+		}
+		if e.netExhausted {
+			return response(403, map[string]any{"message": "could not find an available, non-overlapping IPv4 address pool among the defaults to assign to the network"})
+		}
+		if e.networks == nil {
+			e.networks = map[string]map[string]any{}
+		}
+		stored := map[string]any{"Name": body["Name"], "Driver": body["Driver"], "Scope": "local", "Internal": body["Internal"], "EnableIPv6": body["EnableIPv6"], "Attachable": body["Attachable"], "Ingress": false, "ConfigOnly": false, "Labels": body["Labels"], "Options": body["Options"]}
+		e.networks[body["Name"].(string)] = stored
+		if e.netRace {
+			return response(409, map[string]any{"message": "exists"})
+		}
+		return response(201, map[string]any{"Id": strings.Repeat("d", 64)})
 	case req.Method == "POST" && req.URL.Path == api+"/containers/create":
 		e.posts++
 		if e.container != nil {
@@ -67,11 +103,31 @@ func (e *engine) RoundTrip(req *http.Request) (*http.Response, error) {
 		if json.NewDecoder(req.Body).Decode(&config) != nil {
 			panic("bad create")
 		}
+		raw, _ := json.Marshal(config)
+		_ = json.Unmarshal(raw, &e.lastCreate)
 		host := config["HostConfig"].(map[string]any)
 		delete(config, "HostConfig")
 		for _, key := range []string{"CapAdd", "Devices", "DeviceRequests", "DeviceCgroupRules", "Binds", "Mounts", "VolumesFrom", "Tmpfs", "PortBindings", "Sysctls", "GroupAdd"} {
-			host[key] = nil
+			if _, ok := host[key]; !ok {
+				host[key] = nil
+			}
 		}
+		// The daemon reports capabilities with the CAP_ prefix.
+		if add, ok := host["CapAdd"].([]any); ok {
+			for i, c := range add {
+				add[i] = "CAP_" + c.(string)
+			}
+		}
+		if _, ok := config["User"]; !ok {
+			config["User"] = e.imageUser
+		}
+		nets := map[string]any{}
+		if nc, ok := config["NetworkingConfig"].(map[string]any); ok {
+			for n := range nc["EndpointsConfig"].(map[string]any) {
+				nets[n] = map[string]any{}
+			}
+		}
+		delete(config, "NetworkingConfig")
 		for _, key := range []string{"PidMode", "UTSMode", "UsernsMode", "CgroupParent", "VolumeDriver"} {
 			host[key] = ""
 		}
@@ -81,7 +137,7 @@ func (e *engine) RoundTrip(req *http.Request) (*http.Response, error) {
 		if e.tamperEnv {
 			config["Env"] = []string{"TOKEN=wrong"}
 		}
-		e.container = map[string]any{"Id": strings.Repeat("a", 64), "Image": e.image, "Config": config, "HostConfig": host, "State": map[string]any{"Status": "created", "Running": false}, "Mounts": []any{}}
+		e.container = map[string]any{"Id": strings.Repeat("a", 64), "Image": e.image, "Config": config, "HostConfig": host, "State": map[string]any{"Status": "created", "Running": false}, "Mounts": []any{}, "NetworkSettings": map[string]any{"Networks": nets, "Ports": map[string]any{}}}
 		if e.loseCreate {
 			return nil, errors.New("SENSITIVE daemon error")
 		}
@@ -97,6 +153,13 @@ func (e *engine) RoundTrip(req *http.Request) (*http.Response, error) {
 			return response(400, map[string]any{"message": "SENSITIVE"})
 		}
 		e.container["State"] = map[string]any{"Status": "running", "Running": true}
+		if pb, ok := e.container["HostConfig"].(map[string]any)["PortBindings"].(map[string]any); ok {
+			ports := map[string]any{}
+			for k := range pb {
+				ports[k] = []any{map[string]any{"HostIp": "127.0.0.1", "HostPort": "32768"}}
+			}
+			e.container["NetworkSettings"].(map[string]any)["Ports"] = ports
+		}
 		if e.loseStart {
 			return nil, errors.New("SENSITIVE")
 		}

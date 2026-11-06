@@ -18,6 +18,7 @@ import (
 
 	"filippo.io/age"
 	"github.com/ponytojas/darsena/internal/platform/configvault"
+	"github.com/ponytojas/darsena/internal/platform/jobs"
 	rt "github.com/ponytojas/darsena/internal/platform/runtime"
 	"github.com/ponytojas/darsena/internal/platform/runtime/dockerlocal"
 	"github.com/ponytojas/darsena/internal/platform/runtime/intent"
@@ -43,6 +44,22 @@ type testProvider struct {
 	pullGate chan struct{}
 	// inspectErr, when set, is returned by Inspect.
 	inspectErr error
+	// networkErr, when set, is returned by EnsureNetworks; ensures counts calls.
+	networkErr  error
+	exposedPort int
+	ensures     atomic.Int32
+	// specMu guards lastSpec, the last specification passed to a create.
+	specMu   sync.Mutex
+	lastSpec rt.Spec
+	ensured  []rt.Spec
+}
+
+func (p *testProvider) EnsureNetworks(ctx context.Context, s rt.Spec) error {
+	p.ensures.Add(1)
+	p.specMu.Lock()
+	p.ensured = append(p.ensured, s)
+	p.specMu.Unlock()
+	return p.networkErr
 }
 
 func (p *testProvider) Check(context.Context) error { return p.checkErr }
@@ -56,7 +73,7 @@ func (p *testProvider) ImageStatus(ctx context.Context, pinned string) (rt.Image
 	if state == "" {
 		state = rt.ImageAvailable
 	}
-	out := rt.ImageStatus{State: state, DaemonPlatform: "linux/arm64"}
+	out := rt.ImageStatus{State: state, DaemonPlatform: "linux/arm64", ExposedPort: p.exposedPort}
 	if state == rt.ImageIncompatible {
 		out.Reason, out.Platform = "platform", "windows/amd64"
 	}
@@ -111,6 +128,9 @@ func (p *testProvider) Remove(ctx context.Context, r rt.Ref) error {
 
 func (p *testProvider) CreateConfigured(ctx context.Context, s rt.Spec, a configvault.Accepted) (rt.Result, error) {
 	p.creates.Add(1)
+	p.specMu.Lock()
+	p.lastSpec = s
+	p.specMu.Unlock()
 	ref, _ := dockerlocal.PrepareRef(s)
 	p.result = rt.Result{Ref: ref, State: rt.StateRunning}
 	if p.fail {
@@ -157,7 +177,7 @@ func TestExperimentalServiceLifecycle(t *testing.T) {
 	if err = s.EnableRuntime("install", store, dockerlocal.PrepareRef, provider); err != nil {
 		t.Fatal(err)
 	}
-	app, err := s.store.CreateApplication(ctx, "my-app", "example.com/image@sha256:"+strings.Repeat("a", 64), 3000)
+	app, err := s.store.CreateApplication(ctx, "my-app", "example.com/image@sha256:"+strings.Repeat("a", 64), 3000, jobs.AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +198,7 @@ func TestExperimentalServiceLifecycle(t *testing.T) {
 		return rec
 	}
 	path := "/applications/" + app.ID + "/service"
-	if got := request("POST", path, `{"revision":2,"acknowledge_no_network":true}`); got.Code != 409 || !strings.Contains(got.Body.String(), `"code":"revision_conflict_before_dispatch"`) {
+	if got := request("POST", path, `{"revision":2}`); got.Code != 409 || !strings.Contains(got.Body.String(), `"code":"revision_conflict_before_dispatch"`) {
 		t.Fatalf("stale: %d %s", got.Code, got.Body)
 	}
 	if provider.creates.Load() != 0 {
@@ -187,10 +207,10 @@ func TestExperimentalServiceLifecycle(t *testing.T) {
 	if got := request("GET", path, ""); got.Code != 404 {
 		t.Fatalf("stale revision reserved an intention: %d", got.Code)
 	}
-	if got := request("POST", path, `{"revision":1,"acknowledge_no_network":false}`); got.Code != 400 {
+	if got := request("POST", path, `{"revision":1,"acknowledge_no_network":true}`); got.Code != 400 {
 		t.Fatal(got.Code)
 	}
-	created := request("POST", path, `{"revision":1,"acknowledge_no_network":true}`)
+	created := request("POST", path, `{"revision":1}`)
 	if created.Code != 202 {
 		t.Fatalf("create: %d %s", created.Code, created.Body)
 	}
@@ -204,11 +224,11 @@ func TestExperimentalServiceLifecycle(t *testing.T) {
 	if _, err = vault.Set(ctx, app.ID, 1, "OTHER", "value", false); err != nil {
 		t.Fatal(err)
 	}
-	repeated := request("POST", path, `{"revision":1,"acknowledge_no_network":true}`)
+	repeated := request("POST", path, `{"revision":1}`)
 	if repeated.Code != 200 || provider.creates.Load() != 1 {
 		t.Fatalf("repeat %d creates %d", repeated.Code, provider.creates.Load())
 	}
-	if got := request("POST", path, `{"revision":2,"acknowledge_no_network":true}`); got.Code != 409 || strings.Contains(got.Body.String(), "revision_conflict_before_dispatch") {
+	if got := request("POST", path, `{"revision":2}`); got.Code != 409 || strings.Contains(got.Body.String(), "revision_conflict_before_dispatch") {
 		t.Fatalf("new revision %d", got.Code)
 	}
 	refreshed := request("POST", path+"/refresh", "")
@@ -244,7 +264,7 @@ func TestExperimentalServiceLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	req := httptest.NewRequest("POST", path, bytes.NewBufferString(`{"revision":1,"acknowledge_no_network":true}`))
+	req := httptest.NewRequest("POST", path, bytes.NewBufferString(`{"revision":1}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	s.mux.ServeHTTP(rec, req)
@@ -362,11 +382,11 @@ func TestRuntimeGuardsApplicationEditAndDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	image := func(c string) string { return "example.com/image@sha256:" + strings.Repeat(c, 64) }
-	plain, err := s.store.CreateApplication(ctx, "plain-app", image("a"), 3000)
+	plain, err := s.store.CreateApplication(ctx, "plain-app", image("a"), 3000, jobs.AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	used, err := s.store.CreateApplication(ctx, "used-app", image("a"), 3000)
+	used, err := s.store.CreateApplication(ctx, "used-app", image("a"), 3000, jobs.AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +407,7 @@ func TestRuntimeGuardsApplicationEditAndDelete(t *testing.T) {
 			t.Fatalf("want %d %s, got %d %s", status, code, rec.Code, rec.Body)
 		}
 	}
-	expect(request("POST", "/applications/"+used.ID+"/service", `{"revision":1,"acknowledge_no_network":true}`), 202, "")
+	expect(request("POST", "/applications/"+used.ID+"/service", `{"revision":1}`), 202, "")
 
 	// An intention locks the image but not the port.
 	expect(request("PATCH", "/applications/"+used.ID, `{"version":1,"image":"`+image("b")+`","port":3000}`), 409, "image_locked")
@@ -456,11 +476,11 @@ func TestCreateServiceMarksApplicationAndHandlesDeletion(t *testing.T) {
 		s.mux.ServeHTTP(rec, req)
 		return rec
 	}
-	app, err := s.store.CreateApplication(ctx, "marked-app", image, 3000)
+	app, err := s.store.CreateApplication(ctx, "marked-app", image, 3000, jobs.AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	gone, err := s.store.CreateApplication(ctx, "gone-app", image, 3000)
+	gone, err := s.store.CreateApplication(ctx, "gone-app", image, 3000, jobs.AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +492,7 @@ func TestCreateServiceMarksApplicationAndHandlesDeletion(t *testing.T) {
 	if got, _ := s.store.Application(ctx, app.ID); got.ServiceUsed {
 		t.Fatal("fresh application marked")
 	}
-	if rec := request("POST", "/applications/"+app.ID+"/service", `{"revision":1,"acknowledge_no_network":true}`); rec.Code != 202 {
+	if rec := request("POST", "/applications/"+app.ID+"/service", `{"revision":1}`); rec.Code != 202 {
 		t.Fatal(rec.Code, rec.Body)
 	}
 	if got, _ := s.store.Application(ctx, app.ID); !got.ServiceUsed {
@@ -484,7 +504,7 @@ func TestCreateServiceMarksApplicationAndHandlesDeletion(t *testing.T) {
 
 	// Deleted between the identity check and the gate: 404, not 500.
 	s.beforeGate = func() { _ = s.store.DeleteApplication(ctx, gone.ID) }
-	rec := request("POST", "/applications/"+gone.ID+"/service", `{"revision":1,"acknowledge_no_network":true}`)
+	rec := request("POST", "/applications/"+gone.ID+"/service", `{"revision":1}`)
 	s.beforeGate = nil
 	if rec.Code != 404 || !strings.Contains(rec.Body.String(), `"code":"application_not_found"`) {
 		t.Fatal(rec.Code, rec.Body)
@@ -500,7 +520,7 @@ func TestCreateServiceMarksApplicationAndHandlesDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer demo.Close()
-	marked, err := demo.store.CreateApplication(ctx, "demo-marked", image, 3000)
+	marked, err := demo.store.CreateApplication(ctx, "demo-marked", image, 3000, jobs.AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,9 +565,9 @@ func TestApplicationSummary(t *testing.T) {
 		return rec
 	}
 	image := "example.com/image@sha256:" + strings.Repeat("a", 64)
-	a, _ := s.store.CreateApplication(ctx, "app-a", image, 3000)
-	b, _ := s.store.CreateApplication(ctx, "app-b", image, 3000)
-	c, _ := s.store.CreateApplication(ctx, "app-c", image, 3000)
+	a, _ := s.store.CreateApplication(ctx, "app-a", image, 3000, jobs.AppAccess{})
+	b, _ := s.store.CreateApplication(ctx, "app-b", image, 3000, jobs.AppAccess{})
+	c, _ := s.store.CreateApplication(ctx, "app-c", image, 3000, jobs.AppAccess{})
 	type summary struct {
 		ID                string `json:"id"`
 		ProjectID         *string
@@ -606,7 +626,7 @@ func TestApplicationSummary(t *testing.T) {
 	if _, err = vault.Set(ctx, b.ID, 0, "A", "v", false); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("POST", "/applications/"+a.ID+"/service", bytes.NewBufferString(`{"revision":1,"acknowledge_no_network":true}`))
+	req := httptest.NewRequest("POST", "/applications/"+a.ID+"/service", bytes.NewBufferString(`{"revision":1}`))
 	req.Header.Set("Content-Type", "application/json")
 	if rec := httptest.NewRecorder(); func() int { s.mux.ServeHTTP(rec, req); return rec.Code }() != 202 {
 		t.Fatal("create failed")

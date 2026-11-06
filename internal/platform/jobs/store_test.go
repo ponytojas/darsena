@@ -140,14 +140,14 @@ func TestApplicationsPersistAndValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	image := "ghcr.io/example/app@sha256:" + strings.Repeat("a", 64)
-	if _, err = s.CreateApplication(ctx, "app", "nginx:latest", 80); !errors.Is(err, ErrInvalid) {
+	if _, err = s.CreateApplication(ctx, "app", "nginx:latest", 80, AppAccess{}); !errors.Is(err, ErrInvalid) {
 		t.Fatal("mutable image accepted", err)
 	}
-	app, err := s.CreateApplication(ctx, "app", image, 8080)
+	app, err := s.CreateApplication(ctx, "app", image, 8080, AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.CreateApplication(ctx, "app", image, 8080); !errors.Is(err, ErrConflict) {
+	if _, err = s.CreateApplication(ctx, "app", image, 8080, AppAccess{}); !errors.Is(err, ErrConflict) {
 		t.Fatal(err)
 	}
 	s.Close()
@@ -280,7 +280,7 @@ INSERT INTO applications VALUES ('old','old-app','` + testImage + `',80,'2026-01
 		t.Fatal(app, err)
 	}
 	var version, idx int
-	if err = s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 3 {
+	if err = s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil || version != 4 {
 		t.Fatal(version, err)
 	}
 	if err = s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='applications_project'").Scan(&idx); err != nil || idx != 1 {
@@ -309,7 +309,7 @@ func TestRejectsNewerDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec("PRAGMA user_version=4"); err != nil {
+	if _, err = db.Exec("PRAGMA user_version=5"); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -317,7 +317,7 @@ func TestRejectsNewerDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = Open(context.Background(), path); err == nil {
-		t.Fatal("v4 accepted")
+		t.Fatal("v5 accepted")
 	}
 }
 
@@ -378,9 +378,9 @@ func TestDeleteProjectDetachesMembers(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)
 	p, _ := s.CreateProject(ctx, "Equipo", "blue")
-	a, _ := s.CreateApplication(ctx, "app-a", testImage, 80)
-	b, _ := s.CreateApplication(ctx, "app-b", testImage, 80)
-	c, _ := s.CreateApplication(ctx, "app-c", testImage, 80)
+	a, _ := s.CreateApplication(ctx, "app-a", testImage, 80, AppAccess{})
+	b, _ := s.CreateApplication(ctx, "app-b", testImage, 80, AppAccess{})
+	c, _ := s.CreateApplication(ctx, "app-c", testImage, 80, AppAccess{})
 	if _, err := s.AssignApplications(ctx, &p.ID, []string{a.ID, b.ID}, false); err != nil {
 		t.Fatal(err)
 	}
@@ -408,8 +408,8 @@ func TestAssignApplicationsAtomicAndOnlyUnassigned(t *testing.T) {
 	s := openTest(t)
 	p1, _ := s.CreateProject(ctx, "Uno", "blue")
 	p2, _ := s.CreateProject(ctx, "Dos", "red")
-	a, _ := s.CreateApplication(ctx, "app-a", testImage, 80)
-	b, _ := s.CreateApplication(ctx, "app-b", testImage, 80)
+	a, _ := s.CreateApplication(ctx, "app-a", testImage, 80, AppAccess{})
+	b, _ := s.CreateApplication(ctx, "app-b", testImage, 80, AppAccess{})
 	missing := "missing"
 	if _, err := s.AssignApplications(ctx, &missing, []string{a.ID}, false); !errors.Is(err, ErrProjectNotFound) {
 		t.Fatal(err)
@@ -441,21 +441,21 @@ func TestAssignApplicationsAtomicAndOnlyUnassigned(t *testing.T) {
 func TestUpdateAndDeleteApplication(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)
-	a, _ := s.CreateApplication(ctx, "app-a", testImage, 80)
-	if _, err := s.UpdateApplication(ctx, a.ID, 1, "nginx:latest", 80); !errors.Is(err, ErrInvalid) {
+	a, _ := s.CreateApplication(ctx, "app-a", testImage, 80, AppAccess{})
+	if _, err := s.UpdateApplication(ctx, a.ID, 1, "nginx:latest", 80, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateApplication(ctx, a.ID, 1, testImage, 0); !errors.Is(err, ErrInvalid) {
+	if _, err := s.UpdateApplication(ctx, a.ID, 1, testImage, 0, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatal(err)
 	}
-	up, err := s.UpdateApplication(ctx, a.ID, 1, testImage, 9090)
+	up, err := s.UpdateApplication(ctx, a.ID, 1, testImage, 9090, nil)
 	if err != nil || up.Version != 2 || up.Port != 9090 || up.Name != "app-a" || up.UpdatedAt.Before(a.UpdatedAt) {
 		t.Fatal(up, err)
 	}
-	if _, err = s.UpdateApplication(ctx, a.ID, 1, testImage, 80); !errors.Is(err, ErrConflict) {
+	if _, err = s.UpdateApplication(ctx, a.ID, 1, testImage, 80, nil); !errors.Is(err, ErrConflict) {
 		t.Fatal(err)
 	}
-	if _, err = s.UpdateApplication(ctx, "ghost", 1, testImage, 80); !errors.Is(err, ErrNotFound) {
+	if _, err = s.UpdateApplication(ctx, "ghost", 1, testImage, 80, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatal(err)
 	}
 	if err = s.DeleteApplication(ctx, a.ID); err != nil {
@@ -469,7 +469,7 @@ func TestUpdateAndDeleteApplication(t *testing.T) {
 func TestApplicationJSONKeepsProjectIDNull(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)
-	a, _ := s.CreateApplication(ctx, "app-a", testImage, 80)
+	a, _ := s.CreateApplication(ctx, "app-a", testImage, 80, AppAccess{})
 	data, _ := json.Marshal(a)
 	if !strings.Contains(string(data), `"project_id":null`) || !strings.Contains(string(data), `"image"`) {
 		t.Fatal(string(data))

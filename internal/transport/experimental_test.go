@@ -67,9 +67,9 @@ func TestExperimentalProxyRequiresAuthenticationAndMatchingWorker(t *testing.T) 
 		}
 		if r.URL.Path == "/runtime/info" {
 			if matching.Load() {
-				_, _ = io.WriteString(w, `{"mode":"experimental","installation":"install","policy":"dockerlocal-v3"}`)
+				_, _ = io.WriteString(w, `{"mode":"experimental","installation":"install","policy":"dockerlocal-v4"}`)
 			} else {
-				_, _ = io.WriteString(w, `{"mode":"experimental","installation":"other","policy":"dockerlocal-v3"}`)
+				_, _ = io.WriteString(w, `{"mode":"experimental","installation":"other","policy":"dockerlocal-v4"}`)
 			}
 			return
 		}
@@ -82,7 +82,7 @@ func TestExperimentalProxyRequiresAuthenticationAndMatchingWorker(t *testing.T) 
 	})}
 	go server.Serve(ln)
 	defer server.Close()
-	h := API{Owner: owner, Installation: "install", WorkerSocket: sock}.Handler("")
+	h := API{Owner: owner, Installation: "install", WorkerSocket: sock, AppsPort: 7321}.Handler("")
 	request := func(method, path, origin, csrf string, c *http.Cookie, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "http://127.0.0.1:7300"+path, strings.NewReader(body))
 		if origin != "" {
@@ -101,7 +101,7 @@ func TestExperimentalProxyRequiresAuthenticationAndMatchingWorker(t *testing.T) 
 	}
 	target := "/api/v1/worker/applications/example/service"
 	caps := request("GET", "/api/v1/capabilities", "", "", nil, "")
-	if !strings.Contains(caps.Body.String(), `"provider":"ready"`) {
+	if !strings.Contains(caps.Body.String(), `"provider":"ready"`) || !strings.Contains(caps.Body.String(), `"apps_port":7321`) {
 		t.Fatal(caps.Body.String())
 	}
 	providerReady.Store(false)
@@ -170,15 +170,30 @@ func TestExperimentalProxyRequiresAuthenticationAndMatchingWorker(t *testing.T) 
 			t.Fatalf("authorized %s: %d", action, w.Code)
 		}
 	}
-	demo := API{WorkerSocket: sock}.Handler("")
+	// Routes carry host ports and never reach the browser; the advisory domain
+	// check does.
+	for _, path := range []string{"/api/v1/worker/routes/mi-web", "/api/v1/worker/routes/", "/api/v1/worker/x/routes/mi-web"} {
+		if w := request("GET", path, "http://127.0.0.1:7300", payload.CSRF, cookie, ""); w.Code != 404 || calls.Load() != 3 {
+			t.Fatalf("route %s reached the worker: %d", path, w.Code)
+		}
+	}
+	if w := request("GET", "/api/v1/worker/domains/check?name=mi-web", "http://127.0.0.1:7300", payload.CSRF, cookie, ""); w.Code != 204 || calls.Load() != 4 {
+		t.Fatalf("domain check not forwarded: %d", w.Code)
+	}
+	demo := API{WorkerSocket: sock, AppsPort: 7321}.Handler("")
 	wr := httptest.NewRecorder()
 	demo.ServeHTTP(wr, httptest.NewRequest("POST", "http://127.0.0.1:7300"+target, nil))
-	if wr.Code != 403 || calls.Load() != 3 {
+	if wr.Code != 403 || calls.Load() != 4 {
 		t.Fatal("demo forwarded real operation")
 	}
 	wr = httptest.NewRecorder()
 	demo.ServeHTTP(wr, httptest.NewRequest("POST", "http://127.0.0.1:7300/api/v1/worker/image/pull", nil))
-	if wr.Code != 403 || calls.Load() != 3 {
+	if wr.Code != 403 || calls.Load() != 4 {
 		t.Fatal("demo forwarded an image pull")
+	}
+	wr = httptest.NewRecorder()
+	demo.ServeHTTP(wr, httptest.NewRequest("GET", "http://127.0.0.1:7300/api/v1/capabilities", nil))
+	if strings.Contains(wr.Body.String(), "apps_port") {
+		t.Fatal("demo advertises the application listener")
 	}
 }

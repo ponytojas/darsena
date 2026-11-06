@@ -54,14 +54,15 @@ func (s *Store) ListServices(ctx context.Context, installation, operation string
 		want[id] = true
 	}
 	out := map[string]ServiceSummary{}
-	rows, e := s.db.QueryContext(ctx, `SELECT service,resource,fingerprint,image,revision,phase,observation,version FROM runtime_intents WHERE installation=? AND operation=?`, installation, operation)
+	rows, e := s.db.QueryContext(ctx, `SELECT service,`+intentColumns+` FROM runtime_intents WHERE installation=? AND operation=?`, installation, operation)
 	if e != nil {
 		return nil, ErrUnavailable
 	}
 	for rows.Next() {
 		var service string
 		v := Intent{}
-		if e = rows.Scan(&service, &v.Ref.ResourceID, &v.Ref.Fingerprint, &v.Ref.Image, &v.Revision, &v.Phase, &v.Observation, &v.Version); e != nil {
+		var x extras
+		if e = rows.Scan(append([]any{&service, &v.Ref.ResourceID, &v.Ref.Fingerprint, &v.Ref.Image, &v.Revision, &v.Phase, &v.Observation, &v.Version}, x.dest()...)...); e != nil {
 			_ = rows.Close()
 			return nil, ErrUnavailable
 		}
@@ -70,7 +71,7 @@ func (s *Store) ListServices(ctx context.Context, installation, operation string
 		}
 		v.Ref.Identity = rt.Identity{Installation: installation, Service: service, Operation: operation}
 		v.Ref.Revision = v.Revision
-		out[service] = ServiceSummary{Intent: v, Invalid: !v.Ref.Identity.Valid() || !validIntent(v)}
+		out[service] = ServiceSummary{Intent: v, Invalid: !x.apply(&v.Ref) || !v.Ref.Identity.Valid() || !validIntent(v)}
 	}
 	if e = rows.Err(); e != nil || rows.Close() != nil {
 		return nil, ErrUnavailable
@@ -141,7 +142,7 @@ func (s *Store) DispatchAction(ctx context.Context, id rt.Identity, kind string,
 		return Intent{}, Action{}, false, ErrUnavailable
 	}
 	defer c.ExecContext(context.Background(), `ROLLBACK`)
-	v, e := scanIntent(c.QueryRowContext(ctx, `SELECT resource,fingerprint,image,revision,phase,observation,version FROM runtime_intents WHERE installation=? AND service=? AND operation=?`, id.Installation, id.Service, id.Operation), id)
+	v, e := scanIntent(c.QueryRowContext(ctx, `SELECT `+intentColumns+` FROM runtime_intents WHERE installation=? AND service=? AND operation=?`, id.Installation, id.Service, id.Operation), id)
 	if errors.Is(e, sql.ErrNoRows) {
 		return Intent{}, Action{}, false, ErrNotFound
 	}
@@ -197,7 +198,7 @@ func (s *Store) ObserveAction(ctx context.Context, id rt.Identity, kind string, 
 		return Intent{}, Action{}, ErrUnavailable
 	}
 	defer c.ExecContext(context.Background(), `ROLLBACK`)
-	v, e := scanIntent(c.QueryRowContext(ctx, `SELECT resource,fingerprint,image,revision,phase,observation,version FROM runtime_intents WHERE installation=? AND service=? AND operation=?`, id.Installation, id.Service, id.Operation), id)
+	v, e := scanIntent(c.QueryRowContext(ctx, `SELECT `+intentColumns+` FROM runtime_intents WHERE installation=? AND service=? AND operation=?`, id.Installation, id.Service, id.Operation), id)
 	if e != nil {
 		return Intent{}, Action{}, ErrUnavailable
 	}

@@ -19,13 +19,13 @@ import (
 )
 
 type config struct {
-	command                                                        string
-	demo                                                           bool
-	experimental                                                   bool
-	addr, web, workerSocket, state, socket, configDB, identityFile string
-	installation, dockerSocket, intentDB, ownerCredential, origin  string
-	identity                                                       *age.X25519Identity
-	owner                                                          *ownerauth.Manager
+	command                                                                  string
+	demo                                                                     bool
+	experimental                                                             bool
+	addr, appsAddr, web, workerSocket, state, socket, configDB, identityFile string
+	installation, dockerSocket, intentDB, ownerCredential, origin            string
+	identity                                                                 *age.X25519Identity
+	owner                                                                    *ownerauth.Manager
 }
 
 // resolveConfig resolves explicit flags over present environment variables over defaults.
@@ -61,6 +61,7 @@ func resolveConfig(args []string, lookup func(string) (string, bool)) (config, e
 		fs.StringVar(&c.workerSocket, "worker-socket", "", "worker socket")
 		fs.StringVar(&c.ownerCredential, "owner-credential", "", "owner credential file")
 		fs.StringVar(&c.origin, "origin", "", "exact loopback HTTP origin")
+		fs.StringVar(&c.appsAddr, "apps-addr", "", "loopback address of the application listener (experimental, off by default)")
 	} else {
 		fs.StringVar(&c.state, "state", "", "state database")
 		fs.StringVar(&c.socket, "socket", "", "worker socket")
@@ -81,7 +82,7 @@ func resolveConfig(args []string, lookup func(string) (string, bool)) (config, e
 	}
 	explicit := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
-	envs := map[string]string{"demo": "DARSENA_DEMO", "experimental": "DARSENA_EXPERIMENTAL", "installation": "DARSENA_INSTALLATION", "docker-socket": "DARSENA_DOCKER_SOCKET", "intent-db": "DARSENA_INTENT_DB", "owner-credential": "DARSENA_OWNER_CREDENTIAL", "origin": "DARSENA_ORIGIN", "addr": "DARSENA_ADDR", "web": "DARSENA_WEB", "worker-socket": "DARSENA_WORKER_SOCKET", "state": "DARSENA_STATE", "socket": "DARSENA_SOCKET", "config-db": "DARSENA_CONFIG_DB", "age-identity": "DARSENA_AGE_IDENTITY"}
+	envs := map[string]string{"demo": "DARSENA_DEMO", "experimental": "DARSENA_EXPERIMENTAL", "installation": "DARSENA_INSTALLATION", "docker-socket": "DARSENA_DOCKER_SOCKET", "intent-db": "DARSENA_INTENT_DB", "owner-credential": "DARSENA_OWNER_CREDENTIAL", "origin": "DARSENA_ORIGIN", "apps-addr": "DARSENA_APPS_ADDR", "addr": "DARSENA_ADDR", "web": "DARSENA_WEB", "worker-socket": "DARSENA_WORKER_SOCKET", "state": "DARSENA_STATE", "socket": "DARSENA_SOCKET", "config-db": "DARSENA_CONFIG_DB", "age-identity": "DARSENA_AGE_IDENTITY"}
 	for name, env := range envs {
 		if fs.Lookup(name) == nil || explicit[name] {
 			continue
@@ -98,7 +99,7 @@ func resolveConfig(args []string, lookup func(string) (string, bool)) (config, e
 	if c.experimental && !(rt.Identity{Installation: c.installation, Service: "service", Operation: "initial"}).Valid() {
 		return c, errors.New("experimental mode requires a valid installation identifier")
 	}
-	if c.demo && (c.installation != "" || c.dockerSocket != "" || c.intentDB != "" || c.ownerCredential != "" || c.origin != "") {
+	if c.demo && (c.installation != "" || c.dockerSocket != "" || c.intentDB != "" || c.ownerCredential != "" || c.origin != "" || c.appsAddr != "") {
 		return c, errors.New("experimental options require experimental mode")
 	}
 	if c.command == "serve" {
@@ -112,6 +113,18 @@ func resolveConfig(args []string, lookup func(string) (string, bool)) (config, e
 		}
 		if c.web == "" {
 			return c, errors.New("frontend directory must not be empty")
+		}
+		if c.appsAddr != "" {
+			if !transport.LoopbackAddress(c.appsAddr) {
+				return c, errors.New("the application listener requires an explicit loopback IP address and port")
+			}
+			_, appsPort, _ := net.SplitHostPort(c.appsAddr)
+			if n, err := strconv.Atoi(appsPort); err != nil || n < 1 || n > 65535 || appsPort != strconv.Itoa(n) {
+				return c, errors.New("application listener port must be between 1 and 65535")
+			}
+			if c.appsAddr == c.addr {
+				return c, errors.New("the application listener must not share the server address")
+			}
 		}
 		if c.experimental {
 			if c.workerSocket == "" || c.ownerCredential == "" || c.origin != "http://"+c.addr {

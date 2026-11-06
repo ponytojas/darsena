@@ -88,7 +88,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err = db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return fail(err)
 	}
-	if version > 3 {
+	if version > 4 {
 		return fail(fmt.Errorf("unsupported database version %d", version))
 	}
 	if version == 0 {
@@ -142,6 +142,25 @@ func Open(ctx context.Context, path string) (*Store, error) {
   UPDATE applications SET updated_at = created_at;
   CREATE INDEX applications_project ON applications(project_id);
   PRAGMA user_version = 3;`)
+		if e != nil {
+			_ = tx.Rollback()
+			return fail(e)
+		}
+		if e = tx.Commit(); e != nil {
+			return fail(e)
+		}
+	}
+	if version < 4 {
+		tx, e := db.BeginTx(ctx, nil)
+		if e != nil {
+			return fail(e)
+		}
+		// Existing applications stay isolated, without a shared network or domain.
+		_, e = tx.ExecContext(ctx, `ALTER TABLE applications ADD COLUMN access TEXT NOT NULL DEFAULT 'isolated' CHECK(access IN ('isolated','internal','local'));
+  ALTER TABLE applications ADD COLUMN shared_network INTEGER NOT NULL DEFAULT 0 CHECK(shared_network IN (0,1));
+  ALTER TABLE applications ADD COLUMN domain TEXT;
+  CREATE UNIQUE INDEX applications_domain ON applications(domain) WHERE domain IS NOT NULL;
+  PRAGMA user_version = 4;`)
 		if e != nil {
 			_ = tx.Rollback()
 			return fail(e)
@@ -396,6 +415,27 @@ type Application struct {
 	// this application, so it cannot be deleted nor change image. It survives
 	// restarts in any mode, unlike the runtime's own intention records.
 	ServiceUsed bool `json:"service_used"`
+	// Access is isolated, internal or local; SharedNetwork also joins the common
+	// network. Domain is the lowercase label under .localhost, set only when
+	// Access is local, and unique across applications.
+	Access        string  `json:"access"`
+	SharedNetwork bool    `json:"shared_network"`
+	Domain        *string `json:"domain"`
+}
+
+// Access levels of an application.
+const (
+	AccessIsolated = "isolated"
+	AccessInternal = "internal"
+	AccessLocal    = "local"
+)
+
+// AppAccess is the network exposure of an application. The zero value is isolated.
+type AppAccess struct {
+	Access        string
+	SharedNetwork bool
+	// Domain is required for local access and must be empty otherwise.
+	Domain string
 }
 
 // Project groups applications; an application belongs to at most one project.
@@ -413,6 +453,67 @@ var imageDigest = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:/-]*@sha256:[a-f0
 var ErrInvalid = errors.New("invalid application definition")
 var ErrProjectNotFound = errors.New("project not found")
 var ErrProjectLimit = errors.New("project limit reached")
+
+// ErrDomainTaken reports that another application already owns the domain. It
+// comes from the unique index, never from a prior read.
+var ErrDomainTaken = errors.New("domain already in use")
+
+// ErrInvalidDomain reports a domain with a bad format, or a domain given to an
+// application that is not local, or a local one without it.
+var ErrInvalidDomain = errors.New("invalid domain")
+
+// ErrReservedDomain reports a well-formed domain that is reserved.
+var ErrReservedDomain = errors.New("reserved domain")
+
+var domainLabel = regexp.MustCompile(`^[a-z](?:[a-z0-9-]*[a-z0-9])$`)
+var reservedDomains = map[string]bool{"localhost": true, "www": true, "api": true, "darsena": true, "admin": true}
+
+// NormalizeDomain lower-cases a domain and checks its format and the reserved
+// list. It does not check availability.
+func NormalizeDomain(domain string) (string, error) {
+	d := strings.ToLower(domain)
+	if len(d) < 2 || len(d) > 40 || !domainLabel.MatchString(d) {
+		return "", ErrInvalidDomain
+	}
+	if reservedDomains[d] {
+		return "", ErrReservedDomain
+	}
+	return d, nil
+}
+
+// normalizeAccess validates an access value and returns it with the domain to
+// store: nil unless the application is local.
+func normalizeAccess(a AppAccess) (AppAccess, *string, error) {
+	if a.Access == "" {
+		a.Access = AccessIsolated
+	}
+	switch a.Access {
+	case AccessIsolated:
+		if a.SharedNetwork {
+			return a, nil, ErrInvalid
+		}
+		fallthrough
+	case AccessInternal:
+		if a.Domain != "" {
+			return a, nil, ErrInvalidDomain
+		}
+		return a, nil, nil
+	case AccessLocal:
+		d, err := NormalizeDomain(a.Domain)
+		if err != nil {
+			return a, nil, err
+		}
+		a.Domain = d
+		return a, &d, nil
+	}
+	return a, nil, ErrInvalid
+}
+
+// domainViolation recognises a failed unique index on applications.domain.
+func domainViolation(err error) bool {
+	var coded interface{ Code() int }
+	return errors.As(err, &coded) && coded.Code()&0xff == 19 && strings.Contains(err.Error(), "applications.domain")
+}
 
 // MaxProjects bounds the number of projects.
 const MaxProjects = 100
@@ -454,16 +555,25 @@ func validColor(color string) bool {
 }
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
-func (s *Store) CreateApplication(ctx context.Context, name, image string, port int) (Application, error) {
+// CreateApplication stores a definition. A duplicate name is ErrConflict and a
+// duplicate domain ErrDomainTaken; both are decided by unique indexes.
+func (s *Store) CreateApplication(ctx context.Context, name, image string, port int, access AppAccess) (Application, error) {
 	if !applicationName.MatchString(name) || !validApplication(image, port) {
 		return Application{}, ErrInvalid
+	}
+	access, domain, err := normalizeAccess(access)
+	if err != nil {
+		return Application{}, err
 	}
 	id, err := randomID()
 	if err != nil {
 		return Application{}, err
 	}
 	created := time.Now().UTC()
-	result, err := s.db.ExecContext(ctx, "INSERT INTO applications(id,name,image,port,created_at,version,updated_at) VALUES(?,?,?,?,?,1,?) ON CONFLICT(name) DO NOTHING", id, name, image, port, stamp(created), stamp(created))
+	result, err := s.db.ExecContext(ctx, "INSERT INTO applications(id,name,image,port,created_at,version,updated_at,access,shared_network,domain) VALUES(?,?,?,?,?,1,?,?,?,?) ON CONFLICT(name) DO NOTHING", id, name, image, port, stamp(created), stamp(created), access.Access, boolInt(access.SharedNetwork), domain)
+	if domainViolation(err) {
+		return Application{}, ErrDomainTaken
+	}
 	if err != nil {
 		return Application{}, err
 	}
@@ -474,17 +584,24 @@ func (s *Store) CreateApplication(ctx context.Context, name, image string, port 
 	if count == 0 {
 		return Application{}, ErrConflict
 	}
-	return Application{ID: id, Name: name, Image: image, Port: port, CreatedAt: created, Version: 1, UpdatedAt: created}, nil
+	return Application{ID: id, Name: name, Image: image, Port: port, CreatedAt: created, Version: 1, UpdatedAt: created, Access: access.Access, SharedNetwork: access.SharedNetwork, Domain: domain}, nil
 }
 
-const applicationColumns = "id,name,image,port,created_at,project_id,version,updated_at,runtime_used"
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+const applicationColumns = "id,name,image,port,created_at,project_id,version,updated_at,runtime_used,access,shared_network,domain"
 
 func scanApplication(row scanner) (Application, error) {
 	var app Application
 	var created string
-	var project, updated sql.NullString
-	var used int
-	err := row.Scan(&app.ID, &app.Name, &app.Image, &app.Port, &created, &project, &app.Version, &updated, &used)
+	var project, updated, domain sql.NullString
+	var used, shared int
+	err := row.Scan(&app.ID, &app.Name, &app.Image, &app.Port, &created, &project, &app.Version, &updated, &used, &app.Access, &shared, &domain)
 	if errors.Is(err, sql.ErrNoRows) {
 		return app, ErrNotFound
 	}
@@ -501,6 +618,10 @@ func scanApplication(row scanner) (Application, error) {
 		}
 	}
 	app.ServiceUsed = used != 0
+	app.SharedNetwork = shared != 0
+	if domain.Valid {
+		app.Domain = &domain.String
+	}
 	if project.Valid {
 		app.ProjectID = &project.String
 	}
@@ -526,12 +647,33 @@ func (s *Store) Application(ctx context.Context, id string) (Application, error)
 	return scanApplication(s.db.QueryRowContext(ctx, "SELECT "+applicationColumns+" FROM applications WHERE id=?", id))
 }
 
-// UpdateApplication changes image and port if expectedVersion is current. The name is immutable.
-func (s *Store) UpdateApplication(ctx context.Context, id string, expectedVersion int, image string, port int) (Application, error) {
+// ApplicationByDomain returns the application that owns an exact domain label,
+// or ErrNotFound. The label is not normalized here.
+func (s *Store) ApplicationByDomain(ctx context.Context, domain string) (Application, error) {
+	return scanApplication(s.db.QueryRowContext(ctx, "SELECT "+applicationColumns+" FROM applications WHERE domain=?", domain))
+}
+
+// UpdateApplication changes image and port if expectedVersion is current. The
+// name is immutable. A nil access leaves the access, shared network and domain
+// as they are; otherwise it replaces all three, so leaving local clears the
+// domain and frees it. A domain held by another application is ErrDomainTaken.
+func (s *Store) UpdateApplication(ctx context.Context, id string, expectedVersion int, image string, port int, access *AppAccess) (Application, error) {
 	if !validApplication(image, port) {
 		return Application{}, ErrInvalid
 	}
-	res, err := s.db.ExecContext(ctx, "UPDATE applications SET image=?,port=?,version=version+1,updated_at=? WHERE id=? AND version=?", image, port, stamp(time.Now()), id, expectedVersion)
+	query, args := "UPDATE applications SET image=?,port=?,version=version+1,updated_at=?", []any{image, port, stamp(time.Now())}
+	if access != nil {
+		a, domain, err := normalizeAccess(*access)
+		if err != nil {
+			return Application{}, err
+		}
+		query += ",access=?,shared_network=?,domain=?"
+		args = append(args, a.Access, boolInt(a.SharedNetwork), domain)
+	}
+	res, err := s.db.ExecContext(ctx, query+" WHERE id=? AND version=?", append(args, id, expectedVersion)...)
+	if domainViolation(err) {
+		return Application{}, ErrDomainTaken
+	}
 	if err != nil {
 		return Application{}, err
 	}

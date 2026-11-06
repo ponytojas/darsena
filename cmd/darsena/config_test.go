@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"filippo.io/age"
+	"github.com/ponytojas/darsena/internal/platform/ownerauth"
 )
 
 func env(values map[string]string) func(string) (string, bool) {
@@ -268,5 +269,52 @@ func TestAgeInitCreatesPrivateIdentityWithoutOverwriting(t *testing.T) {
 	}
 	if err := generateIdentity(filepath.Join(shared, "identity.age")); err == nil || strings.Contains(err.Error(), "AGE-SECRET-KEY") {
 		t.Fatalf("created identity in a non-private directory: %v", err)
+	}
+}
+
+func TestAppsAddrIsExperimentalLoopbackOnly(t *testing.T) {
+	// Rejected in demo mode, from a flag or the environment.
+	if _, err := resolveConfig([]string{"serve", "--demo", "--apps-addr", "127.0.0.1:7321"}, env(nil)); err == nil {
+		t.Fatal("apps listener accepted in demo")
+	}
+	if _, err := resolveConfig([]string{"serve", "--demo"}, env(map[string]string{"DARSENA_APPS_ADDR": "127.0.0.1:7321"})); err == nil {
+		t.Fatal("apps listener accepted in demo from the environment")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(home, ".darsena-apps-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	credential := filepath.Join(dir, "owner")
+	if err = ownerauth.Generate(credential); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"serve", "--experimental", "--installation", "install", "--worker-socket", filepath.Join(dir, "w.sock"), "--owner-credential", credential, "--origin", "http://127.0.0.1:7300"}
+	with := func(extra ...string) (config, error) {
+		return resolveConfig(append(append([]string{}, base...), extra...), env(nil))
+	}
+	if c, err := with(); err != nil || c.appsAddr != "" {
+		t.Fatalf("off by default: %v %q", err, c.appsAddr)
+	}
+	if c, err := with("--apps-addr", "127.0.0.1:7321"); err != nil || c.appsAddr != "127.0.0.1:7321" {
+		t.Fatalf("loopback: %v", err)
+	}
+	for _, bad := range []string{"0.0.0.0:7321", "192.168.1.5:7321", ":7321", "localhost:7321", "127.0.0.1", "127.0.0.1:0", "127.0.0.1:70000", "127.0.0.1:07321", "127.0.0.1:7300", "[::]:7321"} {
+		if _, err := with("--apps-addr", bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	c, err := resolveConfig(base, env(map[string]string{"DARSENA_APPS_ADDR": "127.0.0.1:7400"}))
+	if err != nil || c.appsAddr != "127.0.0.1:7400" {
+		t.Fatalf("environment: %v", err)
+	}
+	if _, err := resolveConfig(base, env(map[string]string{"DARSENA_APPS_ADDR": "0.0.0.0:7400"})); err == nil {
+		t.Fatal("non-loopback accepted from the environment")
+	} else if strings.Contains(err.Error(), "0.0.0.0") {
+		t.Fatal("value echoed")
 	}
 }

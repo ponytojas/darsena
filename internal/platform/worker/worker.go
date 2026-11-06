@@ -180,6 +180,7 @@ func Open(ctx context.Context, dbPath, socket string) (*Service, error) {
 	mux.HandleFunc("GET /jobs", s.list)
 	mux.HandleFunc("GET /jobs/{id}", s.get)
 	mux.HandleFunc("GET /image", s.checkImage)
+	mux.HandleFunc("GET /domains/check", s.checkDomain)
 	mux.HandleFunc("GET /applications", s.listApplications)
 	mux.HandleFunc("GET /applications/{id}", s.getApplication)
 	mux.HandleFunc("POST /applications", s.createApplication)
@@ -528,9 +529,12 @@ func configError(w http.ResponseWriter, err error) {
 
 func (s *Service) createApplication(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Name  string `json:"name"`
-		Image string `json:"image"`
-		Port  int    `json:"port"`
+		Name          string `json:"name"`
+		Image         string `json:"image"`
+		Port          int    `json:"port"`
+		Access        string `json:"access"`
+		SharedNetwork bool   `json:"shared_network"`
+		Domain        string `json:"domain"`
 	}
 	if !configBody(w, r, &in) {
 		return
@@ -539,7 +543,16 @@ func (s *Service) createApplication(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	app, err := s.store.CreateApplication(r.Context(), in.Name, image, in.Port)
+	access := jobs.AppAccess{Access: in.Access, SharedNetwork: in.SharedNetwork, Domain: in.Domain}
+	if access.Access == jobs.AccessLocal && access.Domain == "" {
+		// The default is the name; if that is not a valid domain the error
+		// stands and the person must choose one.
+		access.Domain = in.Name
+	}
+	app, err := s.store.CreateApplication(r.Context(), in.Name, image, in.Port, access)
+	if accessFailure(w, err) {
+		return
+	}
 	if errors.Is(err, jobs.ErrInvalid) {
 		failureCode(w, 400, "invalid_application", "invalid application")
 		return
@@ -553,6 +566,51 @@ func (s *Service) createApplication(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	send(w, 201, app)
+}
+
+// accessFailure writes the coded failure for a domain error and reports whether
+// it did.
+func accessFailure(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, jobs.ErrDomainTaken):
+		failureCode(w, 409, "domain_taken", "that domain is already in use")
+	case errors.Is(err, jobs.ErrReservedDomain):
+		failureCode(w, 400, "domain_reserved", "that domain is reserved")
+	case errors.Is(err, jobs.ErrInvalidDomain):
+		failureCode(w, 400, "invalid_domain", "invalid domain")
+	default:
+		return false
+	}
+	return true
+}
+
+// checkDomain is advisory: availability is decided by the store's unique index
+// when an application is saved. The optional application parameter names an
+// application whose own domain is not reported as taken.
+func (s *Service) checkDomain(w http.ResponseWriter, r *http.Request) {
+	type answer struct {
+		Available bool   `json:"available"`
+		Reason    string `json:"reason,omitempty"`
+	}
+	domain, err := jobs.NormalizeDomain(r.URL.Query().Get("name"))
+	switch {
+	case errors.Is(err, jobs.ErrReservedDomain):
+		send(w, 200, answer{Reason: "reserved"})
+		return
+	case err != nil:
+		send(w, 200, answer{Reason: "invalid"})
+		return
+	}
+	owner, err := s.store.ApplicationByDomain(r.Context(), domain)
+	if errors.Is(err, jobs.ErrNotFound) || (err == nil && owner.ID == r.URL.Query().Get("application")) {
+		send(w, 200, answer{Available: true})
+		return
+	}
+	if err != nil {
+		failure(w, 500, "unable to check domain")
+		return
+	}
+	send(w, 200, answer{Reason: "taken"})
 }
 
 // pinnedImage returns the canonical name[:tag]@digest form of a definition

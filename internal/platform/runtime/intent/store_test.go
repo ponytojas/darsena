@@ -173,7 +173,7 @@ func TestConcurrentDispatchAcrossConnections(t *testing.T) {
 	}
 }
 func testRef() rt.Ref {
-	return rt.Ref{Identity: rt.Identity{Installation: "install", Service: "service", Operation: "operation"}, ResourceID: "resource", Fingerprint: strings.Repeat("a", 64), Image: "registry.example/app@sha256:" + strings.Repeat("b", 64), Revision: 1}
+	return rt.Ref{Identity: rt.Identity{Installation: "install", Service: "service", Operation: "operation"}, ResourceID: "resource", Fingerprint: strings.Repeat("a", 64), Image: "registry.example/app@sha256:" + strings.Repeat("b", 64), Revision: 1, Access: rt.AccessIsolated}
 }
 func TestPersistenceAndNoRetry(t *testing.T) {
 	ctx := context.Background()

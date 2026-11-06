@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	rt "github.com/ponytojas/darsena/internal/platform/runtime"
@@ -54,12 +55,16 @@ func (a *Adapter) ImageStatus(ctx context.Context, pinned string) (rt.ImageStatu
 		ID           string `json:"Id"`
 		Os           string
 		Architecture string
-		Config       struct{ Volumes map[string]json.RawMessage }
+		Config       struct {
+			Volumes      map[string]json.RawMessage
+			ExposedPorts map[string]json.RawMessage
+		}
 	}
 	if status != 200 || decode(b, &img) != nil || !strings.HasPrefix(img.ID, "sha256:") || img.Os == "" || img.Architecture == "" {
 		return rt.ImageStatus{}, rt.ErrUnavailable
 	}
 	out.Platform = img.Os + "/" + img.Architecture
+	out.ExposedPort = lowestTCPPort(img.Config.ExposedPorts)
 	switch {
 	case out.Platform != daemon:
 		out.State, out.Reason = rt.ImageIncompatible, "platform"
@@ -210,4 +215,24 @@ func (a *Adapter) Pull(ctx context.Context, pinned string) error {
 		return rt.ErrUnavailable
 	}
 	return nil
+}
+
+// lowestTCPPort returns the lowest valid TCP port in an ExposedPorts map such as
+// {"80/tcp":{}}, or 0. Ports without a protocol count as TCP, as in Docker.
+func lowestTCPPort(ports map[string]json.RawMessage) int {
+	lowest := 0
+	for key := range ports {
+		num, proto, _ := strings.Cut(key, "/")
+		if proto != "" && proto != "tcp" {
+			continue
+		}
+		n, err := strconv.Atoi(num)
+		if err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != num {
+			continue
+		}
+		if lowest == 0 || n < lowest {
+			lowest = n
+		}
+	}
+	return lowest
 }

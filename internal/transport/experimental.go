@@ -46,7 +46,7 @@ func (a API) experimentalWorkerMatches(parent context.Context) bool {
 	}
 	d := json.NewDecoder(bytes.NewReader(body))
 	d.DisallowUnknownFields()
-	return d.Decode(&info) == nil && d.Decode(&struct{}{}) == io.EOF && info.Mode == "experimental" && info.Installation == a.Installation && info.Policy == "dockerlocal-v3"
+	return d.Decode(&info) == nil && d.Decode(&struct{}{}) == io.EOF && info.Mode == "experimental" && info.Installation == a.Installation && info.Policy == "dockerlocal-v4"
 }
 
 // experimentalRuntimeReady checks the worker's bounded, read-only daemon

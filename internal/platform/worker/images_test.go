@@ -13,12 +13,14 @@ import (
 
 	"filippo.io/age"
 	"github.com/ponytojas/darsena/internal/platform/configvault"
+	"github.com/ponytojas/darsena/internal/platform/jobs"
 	rt "github.com/ponytojas/darsena/internal/platform/runtime"
 	"github.com/ponytojas/darsena/internal/platform/runtime/dockerlocal"
 	"github.com/ponytojas/darsena/internal/platform/runtime/intent"
 )
 
 type imageHarness struct {
+	dir      string
 	t        *testing.T
 	s        *Service
 	vault    *configvault.Vault
@@ -41,7 +43,7 @@ func newImageHarness(t *testing.T, runtime bool) *imageHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &imageHarness{t: t, s: s, provider: &testProvider{}}
+	h := &imageHarness{dir: dir, t: t, s: s, provider: &testProvider{}}
 	t.Cleanup(func() { _ = s.Close() })
 	if !runtime {
 		return h
@@ -177,7 +179,7 @@ func waitStatus(t *testing.T, h *imageHarness, ref, want string) map[string]stri
 func TestCreateServiceChecksImageBeforeDispatch(t *testing.T) {
 	ctx := context.Background()
 	h := newImageHarness(t, true)
-	app, err := h.s.store.CreateApplication(ctx, "hola", "docker.io/library/hello-world@sha256:"+hexA, 8080)
+	app, err := h.s.store.CreateApplication(ctx, "hola", "docker.io/library/hello-world@sha256:"+hexA, 8080, jobs.AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,13 +190,13 @@ func TestCreateServiceChecksImageBeforeDispatch(t *testing.T) {
 		want  string
 	}{{rt.ImageMissing, 409, "image_missing"}, {rt.ImageIncompatible, 400, "image_incompatible"}} {
 		h.provider.image = c.state
-		if code, body := h.do("POST", path, `{"revision":0,"acknowledge_no_network":true}`); code != c.code || body["code"] != c.want {
+		if code, body := h.do("POST", path, `{"revision":0}`); code != c.code || body["code"] != c.want {
 			t.Fatalf("%s: %d %v", c.state, code, body)
 		}
 	}
 	h.provider.image = ""
 	h.provider.imageErr = rt.ErrUnavailable
-	if code, body := h.do("POST", path, `{"revision":0,"acknowledge_no_network":true}`); code != 503 || body["code"] != "runtime_unavailable" {
+	if code, body := h.do("POST", path, `{"revision":0}`); code != 503 || body["code"] != "runtime_unavailable" {
 		t.Fatalf("unavailable: %d %v", code, body)
 	}
 	h.provider.imageErr = nil
@@ -210,7 +212,7 @@ func TestCreateServiceChecksImageBeforeDispatch(t *testing.T) {
 	}
 
 	// Without variables, revision 0 creates an empty first revision.
-	if code, body := h.do("POST", path, `{"revision":0,"acknowledge_no_network":true}`); code != 201 && code != 202 {
+	if code, body := h.do("POST", path, `{"revision":0}`); code != 201 && code != 202 {
 		t.Fatalf("create without variables: %d %v", code, body)
 	}
 	if snap, _ := h.vault.Get(ctx, app.ID); snap.Revision != 1 || len(snap.Variables) != 0 {
@@ -233,23 +235,23 @@ func TestCreateServiceChecksImageBeforeDispatch(t *testing.T) {
 	}
 
 	// With variables saved, revision 0 is a conflict before dispatch.
-	other, err := h.s.store.CreateApplication(ctx, "otra", "docker.io/library/hello-world@sha256:"+hexA, 8080)
+	other, err := h.s.store.CreateApplication(ctx, "otra", "docker.io/library/hello-world@sha256:"+hexA, 8080, jobs.AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = h.vault.Set(ctx, other.ID, 0, "NAME", "value", false); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := h.do("POST", "/applications/"+other.ID+"/service", `{"revision":0,"acknowledge_no_network":true}`); code != 409 || body["code"] != "revision_conflict_before_dispatch" {
+	if code, body := h.do("POST", "/applications/"+other.ID+"/service", `{"revision":0}`); code != 409 || body["code"] != "revision_conflict_before_dispatch" {
 		t.Fatalf("revision 0 with configuration: %d %v", code, body)
 	}
 
 	// A definition saved before normalization is canonicalized on create.
-	legacy, err := h.s.store.CreateApplication(ctx, "antigua", "hello-world:tag@sha256:"+hexA, 8080)
+	legacy, err := h.s.store.CreateApplication(ctx, "antigua", "hello-world:tag@sha256:"+hexA, 8080, jobs.AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code, body := h.do("POST", "/applications/"+legacy.ID+"/service", `{"revision":0,"acknowledge_no_network":true}`); code != 201 && code != 202 {
+	if code, body := h.do("POST", "/applications/"+legacy.ID+"/service", `{"revision":0}`); code != 201 && code != 202 {
 		t.Fatalf("legacy image: %d %v", code, body)
 	}
 }
@@ -257,14 +259,14 @@ func TestCreateServiceChecksImageBeforeDispatch(t *testing.T) {
 func TestDeleteApplicationOnceItsServiceIsGone(t *testing.T) {
 	ctx := context.Background()
 	h := newImageHarness(t, true)
-	app, err := h.s.store.CreateApplication(ctx, "borrable", "docker.io/library/hello-world@sha256:"+hexA, 8080)
+	app, err := h.s.store.CreateApplication(ctx, "borrable", "docker.io/library/hello-world@sha256:"+hexA, 8080, jobs.AppAccess{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = h.vault.Set(ctx, app.ID, 0, "TOKEN", "x", true); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := h.do("POST", "/applications/"+app.ID+"/service", `{"revision":1,"acknowledge_no_network":true}`); code != 201 && code != 202 {
+	if code, body := h.do("POST", "/applications/"+app.ID+"/service", `{"revision":1}`); code != 201 && code != 202 {
 		t.Fatalf("create: %d %v", code, body)
 	}
 	// The container still exists: it has to be removed first.

@@ -24,6 +24,7 @@ type imageEngine struct {
 	auth      bool
 	resolve   int
 	platforms []map[string]string
+	exposed   []string
 }
 
 func (e *imageEngine) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -45,7 +46,11 @@ func (e *imageEngine) RoundTrip(req *http.Request) (*http.Response, error) {
 		if e.volumes {
 			volumes["/data"] = map[string]any{}
 		}
-		return reply(200, map[string]any{"Id": "sha256:" + strings.Repeat("c", 64), "Os": e.os, "Architecture": e.arch, "Config": map[string]any{"Volumes": volumes}})
+		exposed := map[string]any{}
+		for _, p := range e.exposed {
+			exposed[p] = map[string]any{}
+		}
+		return reply(200, map[string]any{"Id": "sha256:" + strings.Repeat("c", 64), "Os": e.os, "Architecture": e.arch, "Config": map[string]any{"Volumes": volumes, "ExposedPorts": exposed}})
 	case req.Method == "GET" && strings.HasPrefix(req.URL.Path, api+"/distribution/"):
 		if e.resolve != 200 {
 			return reply(e.resolve, map[string]any{"message": "SENSITIVE"})
@@ -167,5 +172,30 @@ func TestInspectReportsExitCodeOnlyWhenStopped(t *testing.T) {
 	got, err = a.Inspect(ctx, got.Ref)
 	if err != nil || got.ExitCode == nil || *got.ExitCode != 3 {
 		t.Fatalf("exited: %+v %v", got, err)
+	}
+}
+
+func TestImageStatusExposedPort(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		exposed []string
+		want    int
+	}{
+		{nil, 0},
+		{[]string{"8080/tcp", "80/tcp", "53/udp"}, 80},
+		{[]string{"53/udp"}, 0},
+		{[]string{"3000"}, 3000},
+		{[]string{"x/tcp", "0/tcp", "70000/tcp", "9000/tcp"}, 9000},
+	} {
+		e := &imageEngine{present: true, os: "linux", arch: "arm64", exposed: tc.exposed}
+		got, err := newAdapter(e).ImageStatus(ctx, pinned)
+		if err != nil || got.State != rt.ImageAvailable || got.ExposedPort != tc.want {
+			t.Fatalf("%v: %+v %v", tc.exposed, got, err)
+		}
+	}
+	// Volumes stay rejected whatever the image exposes.
+	e := &imageEngine{present: true, os: "linux", arch: "arm64", volumes: true, exposed: []string{"80/tcp"}}
+	if got, _ := newAdapter(e).ImageStatus(ctx, pinned); got.State != rt.ImageIncompatible || got.Reason != "volumes" {
+		t.Fatalf("%+v", got)
 	}
 }
