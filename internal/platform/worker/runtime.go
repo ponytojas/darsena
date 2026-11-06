@@ -23,6 +23,9 @@ type RuntimeProvider interface {
 	Stop(context.Context, rt.Ref) (rt.Result, error)
 	Remove(context.Context, rt.Ref) error
 	Check(context.Context) error
+	// EnsureNetworks creates or verifies the networks a specification needs
+	// without creating a container; a no-op for isolated specifications.
+	EnsureNetworks(context.Context, rt.Spec) error
 	ImageProvider
 }
 
@@ -59,7 +62,7 @@ func (s *Service) EnableRuntime(installation string, store *intent.Store, prepar
 	}
 	s.runtime = &realRuntime{installation: installation, store: store, prepare: prepare, provider: provider, images: provider, pulls: newImagePulls(), gate: make(chan struct{}, 1)}
 	s.mux.HandleFunc("GET /runtime/info", func(w http.ResponseWriter, r *http.Request) {
-		send(w, http.StatusOK, map[string]string{"mode": "experimental", "installation": installation, "policy": "dockerlocal-v3"})
+		send(w, http.StatusOK, map[string]string{"mode": "experimental", "installation": installation, "policy": "dockerlocal-v4"})
 	})
 	s.mux.HandleFunc("GET /runtime/ready", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
@@ -70,6 +73,7 @@ func (s *Service) EnableRuntime(installation string, store *intent.Store, prepar
 		}
 		send(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
+	s.mux.HandleFunc("GET /routes/{domain}", s.route)
 	s.mux.HandleFunc("POST /image/pull", s.pullImage)
 	s.mux.HandleFunc("POST /applications/{id}/service", s.createService)
 	s.mux.HandleFunc("GET /applications/{id}/service", s.getService)
@@ -88,10 +92,23 @@ type serviceResponse struct {
 	Version       uint64                `json:"version"`
 	Action        *intent.Action        `json:"action,omitempty"`
 	ExitCode      *int                  `json:"exit_code,omitempty"`
+	// Access is the network access the service was requested with. Domain is
+	// its name under .localhost, only for local access. The host port is never
+	// part of this response: a link by port would send the owner cookie.
+	Access string  `json:"access"`
+	Domain *string `json:"domain"`
 }
 
 func (s *Service) serviceView(ctx context.Context, v intent.Intent) serviceResponse {
-	view := serviceResponse{ApplicationID: v.Ref.Identity.Service, OperationID: v.Ref.Identity.Operation, Revision: v.Revision, Phase: v.Phase, Observation: v.Observation, Version: v.Version}
+	view := serviceResponse{ApplicationID: v.Ref.Identity.Service, OperationID: v.Ref.Identity.Operation, Revision: v.Revision, Phase: v.Phase, Observation: v.Observation, Version: v.Version, Access: v.Ref.Access}
+	if view.Access == "" {
+		view.Access = rt.AccessIsolated
+	}
+	if view.Access == rt.AccessLocal {
+		if app, err := s.store.Application(ctx, v.Ref.Identity.Service); err == nil {
+			view.Domain = app.Domain
+		}
+	}
 	if a, err := s.runtime.store.LastAction(ctx, v.Ref.Identity); err == nil {
 		view.Action = &a
 	} else if !errors.Is(err, intent.ErrNotFound) {
@@ -119,16 +136,15 @@ func (s *Service) serviceIdentity(w http.ResponseWriter, r *http.Request) (rt.Id
 }
 func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Revision             uint64 `json:"revision"`
-		AcknowledgeNoNetwork bool   `json:"acknowledge_no_network"`
+		Revision uint64 `json:"revision"`
 	}
 	if !configBody(w, r, &input) {
 		return
 	}
 	// Revision 0 means "no saved configuration": an empty first revision is
 	// saved before dispatching, so variables are not required.
-	if input.Revision > math.MaxInt64 || !input.AcknowledgeNoNetwork {
-		failure(w, 400, "revision and isolated network acknowledgement required")
+	if input.Revision > math.MaxInt64 {
+		failure(w, 400, "invalid revision")
 		return
 	}
 	id, ok := s.serviceIdentity(w, r)
@@ -165,15 +181,27 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	if input.Revision == 0 {
 		spec.Revision = 1
 	}
-	if spec.Validate() != nil {
-		failureCode(w, 400, "invalid_image", "application is incompatible with isolated runtime")
+	// An isolated spec stays exactly what it always was: no access fields.
+	if app.Access == jobs.AccessInternal || app.Access == jobs.AccessLocal {
+		if app.Access == jobs.AccessLocal && app.Domain == nil {
+			failureCode(w, 400, "invalid_domain", "a locally open application needs a domain")
+			return
+		}
+		spec.Access, spec.Port, spec.Shared, spec.Alias = app.Access, app.Port, app.SharedNetwork, app.Name
+		if app.ProjectID != nil {
+			spec.Project = *app.ProjectID
+		}
+	}
+	prepared, prepErr := s.runtime.prepare(spec)
+	if prepErr != nil || spec.Validate() != nil {
+		failureCode(w, 400, "invalid_image", "application is incompatible with the runtime")
 		return
 	}
 	// An already-dispatched request is an immutable operation, not a reason to
 	// re-read configuration or send a second create after a later edit.
 	existing, existingErr := s.runtime.store.Get(r.Context(), id)
 	if existingErr == nil {
-		if existing.Revision != input.Revision || existing.Ref.Image != spec.Image {
+		if existing.Revision != input.Revision || existing.Ref != prepared {
 			failure(w, 409, "operation or configuration conflicts")
 			return
 		}
@@ -188,6 +216,11 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 	// Before anything is persisted, the image must be present and usable:
 	// otherwise the single initial operation would be spent on a failure.
 	if !s.imageReady(w, r, spec.Image) {
+		return
+	}
+	// Networks come before the claim for the same reason: a daemon without
+	// address space or with a foreign network must not spend the operation.
+	if spec.Access != "" && !s.networksReady(w, r, spec) {
 		return
 	}
 	if input.Revision == 0 {
@@ -247,6 +280,78 @@ func (s *Service) createService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	send(w, http.StatusCreated, s.serviceView(r.Context(), result.Intent))
+}
+
+// networksReady writes a coded failure unless the networks of a specification
+// exist and are owned by this installation.
+func (s *Service) networksReady(w http.ResponseWriter, r *http.Request, spec rt.Spec) bool {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	err := s.runtime.provider.EnsureNetworks(ctx, spec)
+	switch {
+	case err == nil:
+		return true
+	case errors.Is(err, rt.ErrNetworkUnavailable):
+		failureCode(w, 503, "network_unavailable", "no network could be created; the daemon has no address space left")
+	case errors.Is(err, rt.ErrConflict):
+		failureCode(w, 409, "network_conflict", "a network with the expected name exists but is not owned by Dársena")
+	default:
+		failureCode(w, 503, "runtime_unavailable", "networks could not be prepared")
+	}
+	return false
+}
+
+// route answers the application proxy on the worker socket only. It maps an
+// exact domain to the loopback port Docker assigned to the running service. The
+// port is read by a plain inspection; no observation is recorded.
+func (s *Service) route(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	if d, err := jobs.NormalizeDomain(domain); err != nil || d != domain {
+		failureCode(w, 404, "route_not_found", "unknown domain")
+		return
+	}
+	app, err := s.store.ApplicationByDomain(r.Context(), domain)
+	if errors.Is(err, jobs.ErrNotFound) || (err == nil && app.Access != jobs.AccessLocal) {
+		failureCode(w, 404, "route_not_found", "unknown domain")
+		return
+	}
+	if err != nil {
+		failureCode(w, 503, "route_unavailable", "route unavailable")
+		return
+	}
+	item, err := s.runtime.store.Get(r.Context(), rt.Identity{Installation: s.runtime.installation, Service: app.ID, Operation: serviceOperation})
+	if errors.Is(err, intent.ErrNotFound) {
+		failureCode(w, 503, "not_running", "the service is not running")
+		return
+	}
+	if err != nil {
+		failureCode(w, 503, "route_unavailable", "route unavailable")
+		return
+	}
+	if item.Ref.Access != rt.AccessLocal {
+		failureCode(w, 404, "route_not_found", "unknown domain")
+		return
+	}
+	if item.Phase == intent.Prepared {
+		failureCode(w, 503, "not_running", "the service is not running")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	res, err := s.runtime.provider.Inspect(ctx, item.Ref)
+	if errors.Is(err, rt.ErrNotFound) {
+		failureCode(w, 503, "not_running", "the service is not running")
+		return
+	}
+	if err != nil || ctx.Err() != nil || res.Ref != item.Ref {
+		failureCode(w, 503, "route_unavailable", "route unavailable")
+		return
+	}
+	if res.State != rt.StateRunning || res.HostPort < 1 || res.HostPort > 65535 {
+		failureCode(w, 503, "not_running", "the service is not running")
+		return
+	}
+	send(w, 200, map[string]int{"host_port": res.HostPort})
 }
 
 // imageReady writes a coded failure unless the pinned image is available.

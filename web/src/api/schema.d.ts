@@ -263,6 +263,7 @@ export interface paths {
         /** @description Persistent definitions with project, configuration and (experimental) service summary; no deployment is performed. */
         get: operations["listWorkerApplications"];
         put?: never;
+        /** @description Creates a definition. Domain errors: 409 domain_taken (never reassigned or suffixed), 400 domain_reserved, 400 invalid_domain. */
         post: operations["createWorkerApplication"];
         delete?: never;
         options?: never;
@@ -284,7 +285,7 @@ export interface paths {
         delete: operations["deleteWorkerApplication"];
         options?: never;
         head?: never;
-        /** @description Edits image and port with a version precondition. The image is locked (409 image_locked) once any runtime intention exists; 409 runtime_state_unknown if that cannot be determined. */
+        /** @description Edits image, port, access, shared network and domain with a version precondition. The image is locked (409 image_locked) once any runtime intention exists; access, shared network, domain and, unless the application is isolated, the port are locked likewise (409 access_locked). 409 runtime_state_unknown if that cannot be determined. Domain errors: 409 domain_taken, 400 domain_reserved, 400 invalid_domain. */
         patch: operations["updateWorkerApplication"];
         trace?: never;
     };
@@ -313,7 +314,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** Read experimental isolated service state */
+        /** Read experimental service state */
         get: {
             parameters: {
                 query?: never;
@@ -358,7 +359,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** Create an isolated service once; no network or public URL */
+        /** Create the service once; network access follows the application's access setting */
         post: {
             parameters: {
                 query?: never;
@@ -373,8 +374,6 @@ export interface paths {
                     "application/json": {
                         /** @description Configuration revision the client saw; 0 means no saved configuration, and an empty first revision is saved before dispatching. */
                         revision: number;
-                        /** @enum {boolean} */
-                        acknowledge_no_network: true;
                     };
                 };
             };
@@ -406,7 +405,7 @@ export interface paths {
                         "application/json": components["schemas"]["ExperimentalService"];
                     };
                 };
-                /** @description Invalid request; image_incompatible or invalid_image are rejected before anything is persisted */
+                /** @description Invalid request; image_incompatible, invalid_image or invalid_domain are rejected before anything is persisted */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -429,7 +428,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description Conflict. revision_conflict_before_dispatch and image_missing are rejected before anything is persisted; other conflicts do not guarantee absence of an existing operation. */
+                /** @description Conflict. revision_conflict_before_dispatch, image_missing and network_conflict are rejected before anything is persisted; other conflicts do not guarantee absence of an existing operation. */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -438,7 +437,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description Worker unavailable; runtime_unavailable if image availability could not be checked (nothing persisted) */
+                /** @description Worker unavailable; runtime_unavailable if image availability or networks could not be checked, network_unavailable if the daemon has no address space for a new network (nothing persisted in either case) */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -1044,6 +1043,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/worker/domains/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Advisory check of a domain; the unique index decides when an application is saved */
+        get: operations["checkWorkerDomain"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1109,7 +1125,7 @@ export interface components {
         };
         Error: {
             error: string;
-            /** @description Stable machine-readable code. Worker codes include: invalid_configuration, configuration_conflict, configuration_unavailable, revision_not_retained, variable_not_in_revision, project_name_taken, project_not_found, project_limit, invalid_project, application_not_found, invalid_application, update_conflict, image_locked, application_has_service, runtime_busy, runtime_state_unknown, invalid_image, image_digest_required, image_not_found, registry_unavailable, pull_busy, image_missing, image_incompatible, runtime_unavailable. */
+            /** @description Stable machine-readable code. Worker codes include: invalid_configuration, configuration_conflict, configuration_unavailable, revision_not_retained, variable_not_in_revision, project_name_taken, project_not_found, project_limit, invalid_project, application_not_found, invalid_application, update_conflict, image_locked, application_has_service, runtime_busy, runtime_state_unknown, invalid_image, image_digest_required, image_not_found, registry_unavailable, pull_busy, image_missing, image_incompatible, runtime_unavailable, domain_taken, domain_reserved, invalid_domain, access_locked, network_unavailable, network_conflict. */
             code?: string;
         };
         Capabilities: {
@@ -1131,6 +1147,8 @@ export interface components {
             state: "disabled" | "ready" | "unavailable" | "unknown";
             /** @enum {string} */
             vault: "disabled" | "ready" | "unavailable" | "unknown";
+            /** @description Port of the application listener; present only when it is enabled. Open an application at http://<domain>.localhost:<apps_port>, never by 127.0.0.1 and a port, which would send the owner cookie. */
+            apps_port?: number;
         };
         Status: {
             /** @enum {string} */
@@ -1193,11 +1211,29 @@ export interface components {
             updated_at: string;
             /** @description Permanent mark: a runtime service was once requested, so the application cannot be deleted nor change image. Written before dispatch, in any mode. */
             service_used: boolean;
+            /**
+             * @description Network access. isolated (default): no network. internal: bridge network shared with the project's applications, nothing published. local: internal plus a loopback port reachable at http://<domain>.localhost:<apps_port>.
+             * @enum {string}
+             */
+            access: "isolated" | "internal" | "local";
+            /** @description Also join the common network. Not allowed when isolated. */
+            shared_network: boolean;
+            /** @description Lowercase DNS label (2-40 characters, a-z, 0-9 and hyphen, starting with a letter) under .localhost. Only for local access, unique across applications, never reassigned. */
+            domain: string | null;
         };
         WorkerApplicationInput: {
             name: string;
             image: string;
             port: number;
+            /**
+             * @description Network access. isolated (default): no network. internal: bridge network shared with the project's applications, nothing published. local: internal plus a loopback port reachable at http://<domain>.localhost:<apps_port>.
+             * @enum {string}
+             */
+            access?: "isolated" | "internal" | "local";
+            /** @description Also join the common network. Not allowed when isolated. */
+            shared_network?: boolean;
+            /** @description Only for local access; defaults to the application name when omitted or empty. If that name is not a valid domain the request fails with invalid_domain. */
+            domain?: string;
         };
         WorkerHealth: {
             /** @enum {string} */
@@ -1225,6 +1261,13 @@ export interface components {
             };
             /** @description Exit status of a stopped container; only present in the response to an inspection (refresh), not persisted. */
             exit_code?: number;
+            /**
+             * @description Access the service was requested with.
+             * @enum {string}
+             */
+            access: "isolated" | "internal" | "local";
+            /** @description Name under .localhost for local access, otherwise null. The host port is never exposed; the interface composes the URL from this and capabilities.apps_port. */
+            domain: string | null;
         };
         WorkerProject: {
             id: string;
@@ -1257,6 +1300,15 @@ export interface components {
             version: number;
             image: string;
             port: number;
+            /**
+             * @description Network access. isolated (default): no network. internal: bridge network shared with the project's applications, nothing published. local: internal plus a loopback port reachable at http://<domain>.localhost:<apps_port>.
+             * @enum {string}
+             */
+            access?: "isolated" | "internal" | "local";
+            /** @description Also join the common network. Not allowed when isolated. */
+            shared_network?: boolean;
+            /** @description Only for local access. Omit access, shared_network and domain to keep them; otherwise omitted fields keep their stored value, leaving local clears the domain and entering local without one defaults it to the name. */
+            domain?: string;
         };
         WorkerAssignInput: {
             project_id: string | null;
@@ -1352,6 +1404,16 @@ export interface components {
             platform?: string;
             /** @description os/arch of the runtime daemon */
             daemon_platform?: string;
+            /** @description Lowest TCP port the image declares with EXPOSE; absent if none or unknown. Use it to suggest local access and the port. */
+            exposed_port?: number;
+        };
+        DomainCheck: {
+            available: boolean;
+            /**
+             * @description Present when not available.
+             * @enum {string}
+             */
+            reason?: "taken" | "reserved" | "invalid";
         };
     };
     responses: never;
@@ -3258,6 +3320,39 @@ export interface operations {
             };
             /** @description Request rejected */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    checkWorkerDomain: {
+        parameters: {
+            query: {
+                name: string;
+                /** @description Application whose own domain is not reported as taken. */
+                application?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Availability */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DomainCheck"];
+                };
+            };
+            /** @description Request failed */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

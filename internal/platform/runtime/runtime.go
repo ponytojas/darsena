@@ -18,6 +18,16 @@ var (
 	ErrCancelled      = errors.New("runtime: operation cancelled")
 	ErrTimeout        = errors.New("runtime: operation timed out")
 	ErrUnknownOutcome = errors.New("runtime: operation outcome unknown")
+	// ErrNetworkUnavailable reports that a network could not be created because
+	// the provider has no address space left. Callers map it to a fixed category.
+	ErrNetworkUnavailable = errors.New("runtime: network unavailable")
+)
+
+// Access levels. An empty Access means AccessIsolated.
+const (
+	AccessIsolated = "isolated" // No network, policy v3.
+	AccessInternal = "internal" // Bridge network, nothing published, policy v4.
+	AccessLocal    = "local"    // Bridge network and a loopback port, policy v4.
 )
 
 // Identity scopes an operation to a service and installation. IDs must be
@@ -34,6 +44,15 @@ type Spec struct {
 	Identity Identity
 	Image    string // Locally available image pinned by SHA-256 digest.
 	Revision uint64 // Revision identity only; this does not imply it was applied.
+	// Access selects the network policy. Port is the container's TCP port, Project
+	// the project identifier that scopes the network (empty: per-installation
+	// network without neighbours), Shared joins the common network and Alias is
+	// the DNS name inside the networks. All must be zero when isolated.
+	Access  string
+	Port    int
+	Project string
+	Shared  bool
+	Alias   string
 }
 
 // Ref is an opaque provider identifier scoped to its complete owner identity.
@@ -46,6 +65,18 @@ type Ref struct {
 	Fingerprint string
 	Image       string
 	Revision    uint64
+	// Access, Port, Project, Shared and Alias mirror Spec. Only plain values so
+	// that Ref stays comparable.
+	Access  string
+	Port    int
+	Project string
+	Shared  bool
+	Alias   string
+}
+
+// Spec returns the immutable input this reference was derived from.
+func (r Ref) Spec() Spec {
+	return Spec{Identity: r.Identity, Image: r.Image, Revision: r.Revision, Access: r.Access, Port: r.Port, Project: r.Project, Shared: r.Shared, Alias: r.Alias}
 }
 
 type State string
@@ -64,6 +95,9 @@ type Result struct {
 	State State
 	// ExitCode is the process exit status of a stopped resource, when known.
 	ExitCode *int
+	// HostPort is the loopback port Docker assigned to a running local service;
+	// zero when not published or not running.
+	HostPort int
 }
 
 // Runtime must verify complete ownership before inspecting or mutating a resource.
@@ -90,6 +124,18 @@ var (
 // Validate checks the provider-independent boundary and returns a fixed error.
 func (s Spec) Validate() error {
 	if !s.Identity.Valid() || len(s.Image) > 512 || !imagePattern.MatchString(s.Image) || s.Revision == 0 {
+		return ErrInvalid
+	}
+	switch s.Access {
+	case "", AccessIsolated:
+		if s.Port != 0 || s.Project != "" || s.Shared || s.Alias != "" {
+			return ErrInvalid
+		}
+	case AccessInternal, AccessLocal:
+		if !idPattern.MatchString(s.Alias) || (s.Project != "" && !idPattern.MatchString(s.Project)) || s.Port < 0 || s.Port > 65535 || (s.Access == AccessLocal && s.Port < 1) {
+			return ErrInvalid
+		}
+	default:
 		return ErrInvalid
 	}
 	return nil

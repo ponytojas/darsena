@@ -23,6 +23,8 @@ type API struct {
 	WorkerSocket string
 	Owner        *ownerauth.Manager
 	Installation string
+	// AppsPort is the port of the application listener; zero when disabled.
+	AppsPort int
 }
 
 func send(w http.ResponseWriter, status int, value any) {
@@ -82,6 +84,12 @@ func (a API) Handler(webDir string) http.Handler {
 			for _, part := range strings.Split(r.URL.Path, "/") {
 				if (part == "service" || part == "pull") && a.Owner == nil {
 					problem(w, http.StatusForbidden, "Operación no disponible.")
+					return
+				}
+				// Routes carry the host port of an application. They are for the
+				// application proxy only and never reach a browser.
+				if part == "routes" {
+					problemCode(w, http.StatusNotFound, "not_found", "Ruta API no encontrada.")
 					return
 				}
 			}

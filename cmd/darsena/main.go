@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -75,8 +77,21 @@ func run() error {
 		if err := registry.Start(ctx); err != nil {
 			return err
 		}
-		server := &http.Server{Addr: cfg.addr, Handler: transport.API{Store: store, WorkerSocket: cfg.workerSocket, Owner: cfg.owner, Installation: cfg.installation}.Handler(cfg.web), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
-		result := make(chan error, 1)
+		appsPort := 0
+		if cfg.appsAddr != "" {
+			_, port, _ := net.SplitHostPort(cfg.appsAddr)
+			appsPort, _ = strconv.Atoi(port)
+		}
+		server := &http.Server{Addr: cfg.addr, Handler: transport.API{Store: store, WorkerSocket: cfg.workerSocket, Owner: cfg.owner, Installation: cfg.installation, AppsPort: appsPort}.Handler(cfg.web), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+		result := make(chan error, 2)
+		var apps *http.Server
+		if cfg.appsAddr != "" {
+			apps = (&transport.AppProxy{WorkerSocket: cfg.workerSocket}).Server(cfg.appsAddr)
+			go func() {
+				slog.Info("apps_listener_started", "component", "server")
+				result <- apps.ListenAndServe()
+			}()
+		}
 		go func() {
 			mode := "demo"
 			if cfg.experimental {
@@ -95,6 +110,9 @@ func run() error {
 		defer stopCancel()
 		stopErr := registry.Stop(stopCtx)
 		_ = server.Shutdown(stopCtx)
+		if apps != nil {
+			_ = apps.Shutdown(stopCtx)
+		}
 		slog.Info("server_stopped", "component", "server")
 		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			return errors.New("HTTP server failed")

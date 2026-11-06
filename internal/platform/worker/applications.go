@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ponytojas/darsena/internal/platform/jobs"
@@ -60,11 +61,49 @@ func (s *Service) releaseRuntime() {
 	}
 }
 
+// resolveAccess merges the access fields of an update over the stored ones.
+// It returns nil when the request names none (keep everything) and whether the
+// result differs from what is stored. Leaving local clears the domain; entering
+// local without one defaults it to the name, which the store rejects if invalid.
+func resolveAccess(current jobs.Application, access *string, shared *bool, domain *string) (*jobs.AppAccess, bool) {
+	if access == nil && shared == nil && domain == nil {
+		return nil, false
+	}
+	cur := jobs.AppAccess{Access: current.Access, SharedNetwork: current.SharedNetwork}
+	if current.Domain != nil {
+		cur.Domain = *current.Domain
+	}
+	next := cur
+	if access != nil {
+		next.Access = *access
+		if next.Access != jobs.AccessLocal {
+			next.Domain = ""
+		}
+		if next.Access == jobs.AccessIsolated {
+			next.SharedNetwork = false
+		}
+	}
+	if shared != nil {
+		next.SharedNetwork = *shared
+	}
+	if domain != nil {
+		next.Domain = *domain
+	}
+	if next.Access == jobs.AccessLocal && next.Domain == "" {
+		next.Domain = current.Name
+	}
+	changed := next.Access != cur.Access || next.SharedNetwork != cur.SharedNetwork || strings.ToLower(next.Domain) != cur.Domain
+	return &next, changed
+}
+
 func (s *Service) updateApplication(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Version *int    `json:"version"`
-		Image   *string `json:"image"`
-		Port    *int    `json:"port"`
+		Version       *int    `json:"version"`
+		Image         *string `json:"image"`
+		Port          *int    `json:"port"`
+		Access        *string `json:"access"`
+		SharedNetwork *bool   `json:"shared_network"`
+		Domain        *string `json:"domain"`
 	}
 	if !configBody(w, r, &in) {
 		return
@@ -88,10 +127,11 @@ func (s *Service) updateApplication(w http.ResponseWriter, r *http.Request) {
 		failure(w, 500, "unable to read application")
 		return
 	}
-	if *in.Image != current.Image {
+	access, accessChanged := resolveAccess(current, in.Access, in.SharedNetwork, in.Domain)
+	if *in.Image != current.Image || accessChanged || (*in.Port != current.Port && (current.Access != jobs.AccessIsolated || (access != nil && access.Access != jobs.AccessIsolated))) {
 		// The service identity is fixed per application, so once any intention
-		// exists the image can no longer change. The gate keeps one from
-		// appearing between this check and the update.
+		// exists the image and the network settings can no longer change. The
+		// gate keeps one from appearing between this check and the update.
 		if !s.acquireRuntime(w) {
 			return
 		}
@@ -106,18 +146,27 @@ func (s *Service) updateApplication(w http.ResponseWriter, r *http.Request) {
 			failure(w, 500, "unable to read application")
 			return
 		}
-		exists, known := s.runtimeIntents(r.Context(), current)
-		if !known {
-			failureCode(w, 409, "runtime_state_unknown", "runtime state cannot be determined")
-			return
-		}
-		if exists {
-			failureCode(w, 409, "image_locked", "the image cannot change after a service was requested")
-			return
+		access, accessChanged = resolveAccess(current, in.Access, in.SharedNetwork, in.Domain)
+		portLocked := *in.Port != current.Port && (current.Access != jobs.AccessIsolated || (access != nil && access.Access != jobs.AccessIsolated))
+		if *in.Image != current.Image || accessChanged || portLocked {
+			exists, known := s.runtimeIntents(r.Context(), current)
+			if !known {
+				failureCode(w, 409, "runtime_state_unknown", "runtime state cannot be determined")
+				return
+			}
+			if exists && *in.Image != current.Image {
+				failureCode(w, 409, "image_locked", "the image cannot change after a service was requested")
+				return
+			}
+			if exists {
+				failureCode(w, 409, "access_locked", "access, network, domain and port cannot change after a service was requested")
+				return
+			}
 		}
 	}
-	app, err := s.store.UpdateApplication(r.Context(), id, *in.Version, *in.Image, *in.Port)
+	app, err := s.store.UpdateApplication(r.Context(), id, *in.Version, *in.Image, *in.Port, access)
 	switch {
+	case accessFailure(w, err):
 	case errors.Is(err, jobs.ErrInvalid):
 		failureCode(w, 400, "invalid_application", "invalid application")
 	case errors.Is(err, jobs.ErrNotFound):

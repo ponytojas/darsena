@@ -1270,7 +1270,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Creates a definition. Domain errors: 409 domain_taken (never reassigned or suffixed), 400 domain_reserved, 400 invalid_domain."
       }
     },
     "/worker/applications/{id}": {
@@ -1371,7 +1372,7 @@
       },
       "patch": {
         "operationId": "updateWorkerApplication",
-        "description": "Edits image and port with a version precondition. The image is locked (409 image_locked) once any runtime intention exists; 409 runtime_state_unknown if that cannot be determined.",
+        "description": "Edits image, port, access, shared network and domain with a version precondition. The image is locked (409 image_locked) once any runtime intention exists; access, shared network, domain and, unless the application is isolated, the port are locked likewise (409 access_locked). 409 runtime_state_unknown if that cannot be determined. Domain errors: 409 domain_taken, 400 domain_reserved, 400 invalid_domain.",
         "parameters": [
           {
             "name": "id",
@@ -1604,7 +1605,7 @@
         }
       ],
       "get": {
-        "summary": "Read experimental isolated service state",
+        "summary": "Read experimental service state",
         "responses": {
           "200": {
             "description": "Current persisted service operation state",
@@ -1628,7 +1629,7 @@
         }
       },
       "post": {
-        "summary": "Create an isolated service once; no network or public URL",
+        "summary": "Create the service once; network access follows the application's access setting",
         "requestBody": {
           "required": true,
           "content": {
@@ -1636,20 +1637,13 @@
               "schema": {
                 "type": "object",
                 "required": [
-                  "revision",
-                  "acknowledge_no_network"
+                  "revision"
                 ],
                 "properties": {
                   "revision": {
                     "type": "integer",
                     "minimum": 0,
                     "description": "Configuration revision the client saw; 0 means no saved configuration, and an empty first revision is saved before dispatching."
-                  },
-                  "acknowledge_no_network": {
-                    "type": "boolean",
-                    "enum": [
-                      true
-                    ]
                   }
                 }
               }
@@ -1688,7 +1682,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; image_incompatible or invalid_image are rejected before anything is persisted",
+            "description": "Invalid request; image_incompatible, invalid_image or invalid_domain are rejected before anything is persisted",
             "content": {
               "application/json": {
                 "schema": {
@@ -1704,7 +1698,7 @@
             "description": "Origin or token rejected"
           },
           "409": {
-            "description": "Conflict. revision_conflict_before_dispatch and image_missing are rejected before anything is persisted; other conflicts do not guarantee absence of an existing operation.",
+            "description": "Conflict. revision_conflict_before_dispatch, image_missing and network_conflict are rejected before anything is persisted; other conflicts do not guarantee absence of an existing operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1714,7 +1708,7 @@
             }
           },
           "503": {
-            "description": "Worker unavailable; runtime_unavailable if image availability could not be checked (nothing persisted)"
+            "description": "Worker unavailable; runtime_unavailable if image availability or networks could not be checked, network_unavailable if the daemon has no address space for a new network (nothing persisted in either case)"
           }
         }
       }
@@ -2714,6 +2708,54 @@
           }
         }
       }
+    },
+    "/worker/domains/check": {
+      "get": {
+        "operationId": "checkWorkerDomain",
+        "summary": "Advisory check of a domain; the unique index decides when an application is saved",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            }
+          },
+          {
+            "name": "application",
+            "in": "query",
+            "required": false,
+            "description": "Application whose own domain is not reported as taken.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Availability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainCheck"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2979,7 +3021,7 @@
           },
           "code": {
             "type": "string",
-            "description": "Stable machine-readable code. Worker codes include: invalid_configuration, configuration_conflict, configuration_unavailable, revision_not_retained, variable_not_in_revision, project_name_taken, project_not_found, project_limit, invalid_project, application_not_found, invalid_application, update_conflict, image_locked, application_has_service, runtime_busy, runtime_state_unknown, invalid_image, image_digest_required, image_not_found, registry_unavailable, pull_busy, image_missing, image_incompatible, runtime_unavailable."
+            "description": "Stable machine-readable code. Worker codes include: invalid_configuration, configuration_conflict, configuration_unavailable, revision_not_retained, variable_not_in_revision, project_name_taken, project_not_found, project_limit, invalid_project, application_not_found, invalid_application, update_conflict, image_locked, application_has_service, runtime_busy, runtime_state_unknown, invalid_image, image_digest_required, image_not_found, registry_unavailable, pull_busy, image_missing, image_incompatible, runtime_unavailable, domain_taken, domain_reserved, invalid_domain, access_locked, network_unavailable, network_conflict."
           }
         }
       },
@@ -3065,6 +3107,12 @@
               "unavailable",
               "unknown"
             ]
+          },
+          "apps_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "Port of the application listener; present only when it is enabled. Open an application at http://<domain>.localhost:<apps_port>, never by 127.0.0.1 and a port, which would send the owner cookie."
           }
         }
       },
@@ -3247,7 +3295,10 @@
           "project_id",
           "version",
           "updated_at",
-          "service_used"
+          "service_used",
+          "access",
+          "shared_network",
+          "domain"
         ],
         "properties": {
           "id": {
@@ -3282,6 +3333,24 @@
           "service_used": {
             "type": "boolean",
             "description": "Permanent mark: a runtime service was once requested, so the application cannot be deleted nor change image. Written before dispatch, in any mode."
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "internal",
+              "local"
+            ],
+            "description": "Network access. isolated (default): no network. internal: bridge network shared with the project's applications, nothing published. local: internal plus a loopback port reachable at http://<domain>.localhost:<apps_port>."
+          },
+          "shared_network": {
+            "type": "boolean",
+            "description": "Also join the common network. Not allowed when isolated."
+          },
+          "domain": {
+            "type": "string",
+            "nullable": true,
+            "description": "Lowercase DNS label (2-40 characters, a-z, 0-9 and hyphen, starting with a letter) under .localhost. Only for local access, unique across applications, never reassigned."
           }
         }
       },
@@ -3302,6 +3371,23 @@
           },
           "port": {
             "type": "integer"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "internal",
+              "local"
+            ],
+            "description": "Network access. isolated (default): no network. internal: bridge network shared with the project's applications, nothing published. local: internal plus a loopback port reachable at http://<domain>.localhost:<apps_port>."
+          },
+          "shared_network": {
+            "type": "boolean",
+            "description": "Also join the common network. Not allowed when isolated."
+          },
+          "domain": {
+            "type": "string",
+            "description": "Only for local access; defaults to the application name when omitted or empty. If that name is not a valid domain the request fails with invalid_domain."
           }
         }
       },
@@ -3331,7 +3417,9 @@
           "revision",
           "phase",
           "observation",
-          "version"
+          "version",
+          "access",
+          "domain"
         ],
         "properties": {
           "application_id": {
@@ -3412,6 +3500,20 @@
           "exit_code": {
             "type": "integer",
             "description": "Exit status of a stopped container; only present in the response to an inspection (refresh), not persisted."
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "internal",
+              "local"
+            ],
+            "description": "Access the service was requested with."
+          },
+          "domain": {
+            "type": "string",
+            "nullable": true,
+            "description": "Name under .localhost for local access, otherwise null. The host port is never exposed; the interface composes the URL from this and capabilities.apps_port."
           }
         }
       },
@@ -3562,6 +3664,23 @@
           },
           "port": {
             "type": "integer"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "internal",
+              "local"
+            ],
+            "description": "Network access. isolated (default): no network. internal: bridge network shared with the project's applications, nothing published. local: internal plus a loopback port reachable at http://<domain>.localhost:<apps_port>."
+          },
+          "shared_network": {
+            "type": "boolean",
+            "description": "Also join the common network. Not allowed when isolated."
+          },
+          "domain": {
+            "type": "string",
+            "description": "Only for local access. Omit access, shared_network and domain to keep them; otherwise omitted fields keep their stored value, leaving local clears the domain and entering local without one defaults it to the name."
           }
         }
       },
@@ -3868,6 +3987,33 @@
           "daemon_platform": {
             "type": "string",
             "description": "os/arch of the runtime daemon"
+          },
+          "exposed_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "Lowest TCP port the image declares with EXPOSE; absent if none or unknown. Use it to suggest local access and the port."
+          }
+        }
+      },
+      "DomainCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "taken",
+              "reserved",
+              "invalid"
+            ],
+            "description": "Present when not available."
           }
         }
       }

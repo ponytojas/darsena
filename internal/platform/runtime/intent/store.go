@@ -84,7 +84,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return fail()
 	}
 	var version int
-	if err = db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version > 2 {
+	if err = db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version > 3 {
 		return fail()
 	}
 	if version == 0 {
@@ -118,13 +118,34 @@ func Open(ctx context.Context, path string) (*Store, error) {
 			_, _ = db.ExecContext(context.Background(), `ROLLBACK`)
 			return fail()
 		}
+		version = 2
+	}
+	if version == 2 {
+		// Existing rows read back as isolated: the defaults are the policy-v3 values.
+		tx, e := db.BeginTx(ctx, nil)
+		if e != nil {
+			return fail()
+		}
+		_, e = tx.ExecContext(ctx, `ALTER TABLE runtime_intents ADD COLUMN access TEXT NOT NULL DEFAULT 'isolated' CHECK(access IN ('isolated','internal','local'));
+ ALTER TABLE runtime_intents ADD COLUMN port INTEGER NOT NULL DEFAULT 0 CHECK(port BETWEEN 0 AND 65535);
+ ALTER TABLE runtime_intents ADD COLUMN project TEXT NOT NULL DEFAULT '';
+ ALTER TABLE runtime_intents ADD COLUMN shared INTEGER NOT NULL DEFAULT 0 CHECK(shared IN (0,1));
+ ALTER TABLE runtime_intents ADD COLUMN alias TEXT NOT NULL DEFAULT '';
+ PRAGMA user_version=3;`)
+		if e != nil {
+			_ = tx.Rollback()
+			return fail()
+		}
+		if tx.Commit() != nil {
+			return fail()
+		}
 	}
 	// A version marker alone does not establish that the expected schema exists.
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(runtime_intents)`)
 	if err != nil {
 		return fail()
 	}
-	expected := []string{"installation", "service", "operation", "resource", "fingerprint", "image", "revision", "phase", "observation", "version"}
+	expected := []string{"installation", "service", "operation", "resource", "fingerprint", "image", "revision", "phase", "observation", "version", "access", "port", "project", "shared", "alias"}
 	i := 0
 	for rows.Next() {
 		var cid, notnull, pk int
@@ -135,7 +156,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 			return fail()
 		}
 		wantType := "TEXT"
-		if i == 6 || i == 9 {
+		if i == 6 || i == 9 || i == 11 || i == 13 {
 			wantType = "INTEGER"
 		}
 		if strings.ToUpper(typ) != wantType {
@@ -158,7 +179,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 }
 func (s *Store) Close() error { return s.db.Close() }
 func valid(ref rt.Ref, revision uint64) bool {
-	return ref.Valid() && fingerprint.MatchString(ref.Fingerprint) && ref.Revision == revision && (rt.Spec{Identity: ref.Identity, Image: ref.Image, Revision: revision}).Validate() == nil && revision <= math.MaxInt64
+	return ref.Valid() && fingerprint.MatchString(ref.Fingerprint) && ref.Revision == revision && ref.Spec().Validate() == nil && revision <= math.MaxInt64
 }
 func observationValid(o reconcile.Observation) bool {
 	switch o {
@@ -174,13 +195,45 @@ func validIntent(v Intent) bool {
 
 type scanner interface{ Scan(...any) error }
 
+// intentColumns lists what every read of an intention selects, in Scan order.
+const intentColumns = "resource,fingerprint,image,revision,phase,observation,version,access,port,project,shared,alias"
+
+// extras holds the policy-v4 columns of a row until they are copied to a Ref.
+type extras struct {
+	access, project, alias string
+	port, shared           int
+}
+
+func (x *extras) dest() []any { return []any{&x.access, &x.port, &x.project, &x.shared, &x.alias} }
+
+// apply copies the columns to ref; false means the row holds a value no writer produces.
+func (x extras) apply(ref *rt.Ref) bool {
+	if x.shared != 0 && x.shared != 1 {
+		return false
+	}
+	ref.Access, ref.Port, ref.Project, ref.Shared, ref.Alias = x.access, x.port, x.project, x.shared == 1, x.alias
+	return true
+}
+
+// normalized stores an empty access as isolated, so one meaning has one form.
+func normalized(ref rt.Ref) rt.Ref {
+	if ref.Access == "" {
+		ref.Access = rt.AccessIsolated
+	}
+	return ref
+}
+
 func scanIntent(row scanner, id rt.Identity) (Intent, error) {
 	v := Intent{}
 	v.Ref.Identity = id
-	if err := row.Scan(&v.Ref.ResourceID, &v.Ref.Fingerprint, &v.Ref.Image, &v.Revision, &v.Phase, &v.Observation, &v.Version); err != nil {
+	var x extras
+	if err := row.Scan(append([]any{&v.Ref.ResourceID, &v.Ref.Fingerprint, &v.Ref.Image, &v.Revision, &v.Phase, &v.Observation, &v.Version}, x.dest()...)...); err != nil {
 		return Intent{}, err
 	}
 	v.Ref.Revision = v.Revision
+	if !x.apply(&v.Ref) {
+		return Intent{}, ErrUnavailable
+	}
 	if !validIntent(v) {
 		return Intent{}, ErrUnavailable
 	}
@@ -193,7 +246,12 @@ func (s *Store) Prepare(ctx context.Context, ref rt.Ref, revision uint64) (Inten
 	if !valid(ref, revision) {
 		return Intent{}, ErrInvalid
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO runtime_intents VALUES(?,?,?,?,?,?,?, 'prepared','',1)`, ref.Identity.Installation, ref.Identity.Service, ref.Identity.Operation, ref.ResourceID, ref.Fingerprint, ref.Image, revision)
+	ref = normalized(ref)
+	shared := 0
+	if ref.Shared {
+		shared = 1
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO runtime_intents(installation,service,operation,resource,fingerprint,image,revision,phase,observation,version,access,port,project,shared,alias) VALUES(?,?,?,?,?,?,?, 'prepared','',1,?,?,?,?,?)`, ref.Identity.Installation, ref.Identity.Service, ref.Identity.Operation, ref.ResourceID, ref.Fingerprint, ref.Image, revision, ref.Access, ref.Port, ref.Project, shared, ref.Alias)
 	if err != nil {
 		return Intent{}, ErrUnavailable
 	}
@@ -212,7 +270,7 @@ func (s *Store) Get(ctx context.Context, id rt.Identity) (Intent, error) {
 	if !id.Valid() {
 		return Intent{}, ErrInvalid
 	}
-	v, err := scanIntent(s.db.QueryRowContext(ctx, `SELECT resource,fingerprint,image,revision,phase,observation,version FROM runtime_intents WHERE installation=? AND service=? AND operation=?`, id.Installation, id.Service, id.Operation), id)
+	v, err := scanIntent(s.db.QueryRowContext(ctx, `SELECT `+intentColumns+` FROM runtime_intents WHERE installation=? AND service=? AND operation=?`, id.Installation, id.Service, id.Operation), id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Intent{}, ErrNotFound
 	}
@@ -246,7 +304,7 @@ func (s *Store) ListRecoverable(ctx context.Context, after *rt.Identity, limit i
 	if after != nil {
 		cursor = *after
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT installation,service,operation,resource,fingerprint,image,revision,phase,observation,version FROM runtime_intents WHERE phase IN ('dispatched','observed') AND (installation,service,operation) > (?,?,?) ORDER BY installation,service,operation LIMIT ?`, cursor.Installation, cursor.Service, cursor.Operation, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT installation,service,operation,`+intentColumns+` FROM runtime_intents WHERE phase IN ('dispatched','observed') AND (installation,service,operation) > (?,?,?) ORDER BY installation,service,operation LIMIT ?`, cursor.Installation, cursor.Service, cursor.Operation, limit)
 	if err != nil {
 		return nil, ErrUnavailable
 	}
@@ -254,7 +312,8 @@ func (s *Store) ListRecoverable(ctx context.Context, after *rt.Identity, limit i
 	items := make([]Intent, 0, limit)
 	for rows.Next() {
 		var v Intent
-		if rows.Scan(&v.Ref.Identity.Installation, &v.Ref.Identity.Service, &v.Ref.Identity.Operation, &v.Ref.ResourceID, &v.Ref.Fingerprint, &v.Ref.Image, &v.Revision, &v.Phase, &v.Observation, &v.Version) != nil {
+		var x extras
+		if rows.Scan(append([]any{&v.Ref.Identity.Installation, &v.Ref.Identity.Service, &v.Ref.Identity.Operation, &v.Ref.ResourceID, &v.Ref.Fingerprint, &v.Ref.Image, &v.Revision, &v.Phase, &v.Observation, &v.Version}, x.dest()...)...) != nil || !x.apply(&v.Ref) {
 			return nil, ErrUnavailable
 		}
 		v.Ref.Revision = v.Revision
@@ -297,7 +356,7 @@ func (s *Store) transition(ctx context.Context, id rt.Identity, version uint64, 
 		return Intent{}, ErrUnavailable
 	}
 	defer conn.ExecContext(context.Background(), `ROLLBACK`)
-	v, err := scanIntent(conn.QueryRowContext(ctx, `SELECT resource,fingerprint,image,revision,phase,observation,version FROM runtime_intents WHERE installation=? AND service=? AND operation=?`, id.Installation, id.Service, id.Operation), id)
+	v, err := scanIntent(conn.QueryRowContext(ctx, `SELECT `+intentColumns+` FROM runtime_intents WHERE installation=? AND service=? AND operation=?`, id.Installation, id.Service, id.Operation), id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Intent{}, ErrConflict
 	}

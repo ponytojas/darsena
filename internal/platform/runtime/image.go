@@ -120,6 +120,8 @@ type ImageStatus struct {
 	Reason         string
 	Platform       string
 	DaemonPlatform string
+	// ExposedPort is the lowest TCP port the image declares with EXPOSE, or 0.
+	ExposedPort int
 }
 
 // ErrImagePlatform reports that a registry has no variant of an image for the

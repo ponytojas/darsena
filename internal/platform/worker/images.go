@@ -58,6 +58,8 @@ type imageResponse struct {
 	Reason         string `json:"reason,omitempty"`
 	Platform       string `json:"platform,omitempty"`
 	DaemonPlatform string `json:"daemon_platform,omitempty"`
+	// ExposedPort is the lowest TCP port the image declares, when known.
+	ExposedPort int `json:"exposed_port,omitempty"`
 }
 
 // checkImage normalizes a reference typed by a person. Without the runtime it
@@ -109,6 +111,7 @@ func (s *Service) checkImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out.Status, out.Reason, out.Platform, out.DaemonPlatform = string(status.State), status.Reason, status.Platform, status.DaemonPlatform
+	out.ExposedPort = status.ExposedPort
 	if status.State == rt.ImageMissing {
 		if state, reason := s.runtime.pulls.pullState(pinned); state != "" {
 			out.Status, out.Reason = state, reason
