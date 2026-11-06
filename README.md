@@ -1,6 +1,6 @@
 # Dársena
 
-Dársena is an open-source platform for managing applications. Its demo runs **local simulations**; demo applications are in memory, and the optional worker persists jobs and encrypted saved configuration. An explicitly enabled local experimental mode can create one container per saved application, isolated by default, using a dedicated rootless Docker Engine. It does not build images, connect to GitHub or provide public URLs; only the «Abierta en este equipo» access level publishes a port, on loopback. URLs ending in `.example.invalid` are fictitious. The experimental mode is under review and is not production-ready.
+Dársena is an open-source platform for managing applications. Its demo runs **local simulations**; demo applications are in memory, and the optional worker persists jobs and encrypted saved configuration. An explicitly enabled local experimental mode can create one container per saved application, isolated by default, using a dedicated rootless Docker Engine. It does not build images, connect to GitHub or provide public URLs; only the "Open on this computer" access level publishes a port, on loopback. URLs ending in `.example.invalid` are fictitious. The experimental mode is under review and is not production-ready.
 
 ## Run the demo
 
@@ -48,7 +48,7 @@ age-keygen -o /tmp/darsena-worker/identity.age
 go run ./cmd/darsena worker --demo --state /tmp/darsena-worker/state.db --socket /tmp/darsena-worker/worker.sock --config-db /tmp/darsena-worker/config.db --age-identity /tmp/darsena-worker/identity.age
 ```
 
-Connect the demo server with `--worker-socket` as described above, then create an application with the *definition* type from **Nueva aplicación**. A pinned image and variables are stored but never deployed. Definitions can be grouped into projects, moved in bulk with **Seleccionar**, edited from their **Ajustes** tab, and their variable history can be reviewed and restored from **Historial** (values are never shown); a definition that ever had a service cannot change its image; deleting it first stops and removes its container if it still exists (experimental mode is needed to confirm it is gone). Do not use production credentials in this unauthenticated demo.
+Connect the demo server with `--worker-socket` as described above, then create an application with the *definition* type from **New application**. A pinned image and variables are stored but never deployed. Definitions can be grouped into projects, moved in bulk with **Select**, edited from their **Settings** tab, and their variable history can be reviewed and restored from **History** (values are never shown); a definition that ever had a service cannot change its image; deleting it first stops and removes its container if it still exists (experimental mode is needed to confirm it is gone). Do not use production credentials in this unauthenticated demo.
 
 In demo mode the interface reports the worker and encrypted-store availability and marks real execution as disabled. If availability cannot be confirmed, affected actions remain disabled and drafts are kept for a retry. `GET /api/v1/capabilities` exposes the effective mode and availability categories; in experimental mode provider readiness is a bounded daemon preflight, not proof of kernel isolation. See [operations](docs/operations.md) for diagnostics.
 
