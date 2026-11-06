@@ -1,7 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { violations } from "./axe";
+import { expectEnglish } from "./english";
 
-const summary = { project_id: null, version: 1, updated_at: "2026-01-01T00:00:00Z", service_used: false, config: null, config_unavailable: false, service: null, service_unavailable: false };
+const summary = { project_id: null, version: 1, updated_at: "2026-01-01T00:00:00Z", service_used: false, access: "isolated", shared_network: false, domain: null, config: null, config_unavailable: false, service: null, service_unavailable: false };
 
 /** Image checks: a pinned reference is echoed back as available; anything else is not found. */
 async function mockImages(page: Page) {
@@ -34,7 +35,7 @@ test("owner creates one isolated service and can query an uncertain result", asy
     expect(route.request().headers()["x-darsena-csrf"]).toBe("session-token");
     if (route.request().method() === "POST" && !route.request().url().endsWith("/refresh")) {
       creates++;
-      expect(route.request().postDataJSON()).toEqual({ revision: 1, acknowledge_no_network: true });
+      expect(route.request().postDataJSON()).toEqual({ revision: 1 });
       exists = true;
       await route.abort("failed");
     } else if (exists) await route.fulfill({ json: service });
@@ -47,7 +48,7 @@ test("owner creates one isolated service and can query an uncertain result", asy
   await page.getByLabel("Credencial del propietario").fill("test-only-credential");
   await page.getByRole("button", { name: "Iniciar sesión" }).click();
   await expect(page.getByText("Todavía no hay un servicio para esta aplicación.")).toBeVisible();
-  await expect(page.getByText(/sin red ni URL pública/)).toBeVisible();
+  await expect(page.getByText(/sin red ni dirección/)).toBeVisible();
   await page.getByRole("button", { name: "Desplegar", exact: true }).click();
   await expect(page.getByText("En ejecución", { exact: true })).toBeVisible();
   await expect(page.getByText(/No se ha podido confirmar el resultado/)).toHaveCount(0);
@@ -199,8 +200,8 @@ test("experimental creation opens the definition form directly and lands on the 
   const form = page.getByRole("region", { name: "Definición desde imagen" });
   await form.getByLabel("Nombre", { exact: true }).fill("X");
   await form.getByLabel("Imagen", { exact: true }).fill("sin-digest");
-  await form.getByText("Más opciones").click();
-  await form.getByLabel("Puerto").fill("70000");
+  await form.getByText("Más opciones", { exact: true }).click();
+  await form.getByLabel("Puerto", { exact: true }).fill("70000");
   await form.getByRole("button", { name: "Guardar sin desplegar" }).click();
   await expect(form.getByText(/Usa de 2 a 40 caracteres/)).toBeVisible();
   await expect(form.getByText("No se encuentra esa imagen o etiqueta en un registro público.")).toBeVisible();
@@ -209,7 +210,7 @@ test("experimental creation opens the definition form directly and lands on the 
   expect(created).toHaveLength(0);
   await form.getByLabel("Nombre", { exact: true }).fill("nueva-app");
   await form.getByLabel("Imagen", { exact: true }).fill(`test@sha256:${"c".repeat(64)}`);
-  await form.getByLabel("Puerto").fill("9000");
+  await form.getByLabel("Puerto", { exact: true }).fill("9000");
   await form.getByRole("button", { name: "Guardar sin desplegar" }).click();
   await expect(page).toHaveURL(/\/apps\/definition\/app9$/);
   await expect(page.getByRole("heading", { name: "nueva-app" })).toBeVisible();
@@ -281,8 +282,8 @@ async function mockExperimental(page: Page, apps: unknown[]) {
 }
 
 async function signIn(page: Page) {
-  await page.getByLabel("Credencial del propietario").fill("test-only-credential");
-  await page.getByRole("button", { name: "Iniciar sesión" }).click();
+  await page.getByLabel(/Credencial del propietario|Owner credential/).fill("test-only-credential");
+  await page.getByRole("button", { name: /Iniciar sesión|Sign in/ }).click();
 }
 
 const lockedApp = () => ({ id: "app1", name: "bitacora", image: `test@sha256:${"a".repeat(64)}`, port: 8080, created_at: "2026-01-01T00:00:00Z", ...summary });
@@ -400,7 +401,7 @@ test("Deploy from the form resolves the tag, downloads, creates the project and 
   expect(bodies.project).toMatchObject({ name: "Web" });
   expect(bodies.save).toEqual({ name: "web", image: canonical, port: 8080 });
   expect(bodies.variable).toEqual({ revision: 0, value: "x", secret: true });
-  expect(bodies.service).toEqual({ revision: 1, acknowledge_no_network: true });
+  expect(bodies.service).toEqual({ revision: 1 });
 });
 
 test("a rejection before dispatch from Deploy is not uncertain and can be retried", async ({ page }) => {
@@ -425,7 +426,7 @@ test("a rejection before dispatch from Deploy is not uncertain and can be retrie
   await page.getByRole("button", { name: "Desplegar", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "La imagen no está descargada en el runtime" })).toBeVisible();
   await expect(page.getByText(/No se ha podido confirmar el resultado/)).toHaveCount(0);
-  expect(bodies).toEqual([{ revision: 0, acknowledge_no_network: true }]);
+  expect(bodies).toEqual([{ revision: 0 }]);
   reply = { status: 201, json: running };
   await page.getByRole("button", { name: "Reintentar" }).click();
   await expect(page.getByRole("button", { name: "Parar servicio" })).toBeVisible();
@@ -454,4 +455,369 @@ test("a service that ends by itself reads as exited, with its exit code", async 
   await page.getByRole("button", { name: "Consultar estado" }).click();
   await expect(page.getByText("El proceso terminó con código 3.")).toBeVisible();
   await expect(page.getByText("Terminado", { exact: true })).toBeVisible();
+});
+
+// Network access (Fase E4). The proxy port comes from /capabilities and is absent when the listener is off.
+async function mockCapabilities(page: Page, appsPort?: number) {
+  await page.route("**/api/v1/capabilities", route => route.fulfill({ json: { mode: "experimental", real_execution: { enabled: true, provider: "ready", configuration: "accepted_revision" }, worker: { configured: true, status: "ready" }, state: "ready", vault: "ready", ...(appsPort ? { apps_port: appsPort } : {}) } }));
+}
+const digest = `test@sha256:${"c".repeat(64)}`;
+
+async function openNewForm(page: Page, appsPort: number | undefined = 7321) {
+  await mockExperimental(page, []);
+  await mockCapabilities(page, appsPort);
+  await page.goto("/apps/new?kind=definition");
+  await signIn(page);
+}
+
+test("the access selector sends each level to the API and Isolated sends nothing extra", async ({ page }) => {
+  const saved: unknown[] = [];
+  await openNewForm(page);
+  await page.route("**/api/v1/worker/applications", route => {
+    if (route.request().method() !== "POST") return route.fulfill({ json: [] });
+    saved.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, json: { ...lockedApp(), id: "app9", name: "web", image: digest } });
+  });
+  const form = page.getByRole("region", { name: "Definición desde imagen" });
+  await form.getByLabel("Nombre", { exact: true }).fill("web");
+  await form.getByLabel("Imagen", { exact: true }).fill(digest);
+  await form.getByText("Más opciones", { exact: true }).click();
+  await expect(form.getByLabel("Acceso", { exact: true })).toHaveValue("isolated");
+  await expect(form.getByText("Sin red: no recibe ni hace conexiones.")).toBeVisible();
+  await expect(form.getByLabel("Conectar también a la red común")).toHaveCount(0);
+  await expect(form.getByLabel("Dominio", { exact: true })).toHaveCount(0);
+  await expect(form.getByText("Se ejecutará aislada, sin red ni dirección.")).toBeVisible();
+
+  await form.getByLabel("Acceso", { exact: true }).selectOption("internal");
+  await form.getByLabel("Conectar también a la red común").check();
+  await expect(form.getByText(/tiene acceso a Internet y puede alcanzar a las demás aplicaciones de su red/)).toBeVisible();
+  await expect(form.getByLabel("Dominio", { exact: true })).toHaveCount(0);
+
+  await form.getByLabel("Acceso", { exact: true }).selectOption("local");
+  await expect(form.getByLabel("Dominio", { exact: true })).toHaveValue("web");
+  await expect(form.getByText("Se abrirá en http://web.localhost:7321")).toBeVisible();
+  await expect(form.getByText(/no tiene autenticación: cualquier programa de este equipo, y cualquier web abierta en el navegador/)).toBeVisible();
+  await form.getByLabel("Dominio", { exact: true }).fill("mi-web");
+  await expect(form.getByText("Se abrirá en http://mi-web.localhost:7321")).toBeVisible();
+  expect(await violations(page)).toEqual([]);
+  await form.getByRole("button", { name: "Guardar sin desplegar" }).click();
+  await expect(page).toHaveURL(/\/apps\/definition\/app9$/);
+  expect(saved).toEqual([{ name: "web", image: digest, port: 8080, access: "local", shared_network: true, domain: "mi-web" }]);
+});
+
+test("internal access is sent without a domain, and going back to Isolated sends nothing", async ({ page }) => {
+  const saved: unknown[] = [];
+  await openNewForm(page);
+  await page.route("**/api/v1/worker/applications", route => {
+    if (route.request().method() !== "POST") return route.fulfill({ json: [] });
+    saved.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, json: { ...lockedApp(), id: "app9", name: "api", image: digest } });
+  });
+  const form = page.getByRole("region", { name: "Definición desde imagen" });
+  await form.getByLabel("Nombre", { exact: true }).fill("api");
+  await form.getByLabel("Imagen", { exact: true }).fill(digest);
+  await form.getByText("Más opciones", { exact: true }).click();
+  await form.getByLabel("Acceso", { exact: true }).selectOption("internal");
+  await form.getByRole("button", { name: "Guardar sin desplegar" }).click();
+  await expect(page).toHaveURL(/\/apps\/definition\/app9$/);
+  expect(saved).toEqual([{ name: "api", image: digest, port: 8080, access: "internal", shared_network: false }]);
+});
+
+test("an image that declares a port preselects Open with that port, visibly, and never overrides a manual choice", async ({ page }) => {
+  const image = (port?: number) => ({ reference: digest, status: "available", platform: "linux/arm64", daemon_platform: "linux/arm64", ...(port ? { exposed_port: port } : {}) });
+  await openNewForm(page);
+  await page.route(/\/api\/v1\/worker\/image\?/, route => {
+    const ref = new URL(route.request().url()).searchParams.get("ref") ?? "";
+    return ref === "nginx:1.27" ? route.fulfill({ json: image(80) }) : ref === "nginx:1.28" ? route.fulfill({ json: image(3000) }) : route.fulfill({ json: image() });
+  });
+  const form = page.getByRole("region", { name: "Definición desde imagen" });
+  await form.getByLabel("Nombre", { exact: true }).fill("web");
+  await form.getByLabel("Imagen", { exact: true }).fill("nginx:1.27");
+  // Without opening anything: the section opens by itself and says why.
+  await expect(form.getByLabel("Acceso", { exact: true })).toHaveValue("local");
+  await expect(form.getByText("Elegida porque la imagen declara el puerto 80.")).toBeVisible();
+  await expect(form.getByLabel("Puerto", { exact: true })).toHaveValue("80");
+  await expect(form.getByText("Se abrirá en http://web.localhost:7321")).toBeVisible();
+  expect(await violations(page)).toEqual([]);
+
+  await form.getByLabel("Acceso", { exact: true }).selectOption("internal");
+  await expect(form.getByText("Elegida porque la imagen declara el puerto 80.")).toHaveCount(0);
+  await form.getByLabel("Puerto", { exact: true }).fill("9000");
+  const second = page.waitForResponse(/ref=nginx%3A1\.28|ref=nginx:1\.28/);
+  await form.getByLabel("Imagen", { exact: true }).fill("nginx:1.28");
+  await second;
+  await page.waitForTimeout(300);
+  await expect(form.getByLabel("Acceso", { exact: true })).toHaveValue("internal");
+  await expect(form.getByLabel("Puerto", { exact: true })).toHaveValue("9000");
+});
+
+test("an image without a declared port keeps the form Isolated and the section closed", async ({ page }) => {
+  await openNewForm(page);
+  const form = page.getByRole("region", { name: "Definición desde imagen" });
+  await form.getByLabel("Nombre", { exact: true }).fill("web");
+  await form.getByLabel("Imagen", { exact: true }).fill(digest);
+  await expect(form.getByText("Se descargará al desplegar.").or(form.getByText(/Descargada en el runtime/))).toBeVisible();
+  await expect(form.getByLabel("Acceso", { exact: true })).toBeHidden();
+  await form.getByText("Más opciones", { exact: true }).click();
+  await expect(form.getByLabel("Acceso", { exact: true })).toHaveValue("isolated");
+});
+
+test("a domain that is taken is flagged while typing and blocks both buttons", async ({ page }) => {
+  const posts: unknown[] = [];
+  await openNewForm(page);
+  await page.route(/\/api\/v1\/worker\/domains\/check/, route => {
+    const name = new URL(route.request().url()).searchParams.get("name");
+    return route.fulfill({ json: name === "libre" ? { available: true } : name === "www" ? { available: false, reason: "reserved" } : { available: false, reason: "taken" } });
+  });
+  await page.route("**/api/v1/worker/applications", route => {
+    if (route.request().method() === "POST") posts.push(route.request().postDataJSON());
+    return route.fulfill({ json: [] });
+  });
+  const form = page.getByRole("region", { name: "Definición desde imagen" });
+  await form.getByLabel("Nombre", { exact: true }).fill("web");
+  await form.getByLabel("Imagen", { exact: true }).fill(digest);
+  await form.getByText("Más opciones", { exact: true }).click();
+  await form.getByLabel("Acceso", { exact: true }).selectOption("local");
+  await expect(form.getByText("Ese dominio ya lo usa otra aplicación. Elige otro.")).toBeVisible();
+  expect(await violations(page)).toEqual([]);
+  await form.getByRole("button", { name: "Guardar sin desplegar" }).click();
+  await expect(form.getByLabel("Dominio", { exact: true })).toBeFocused();
+  await form.getByRole("button", { name: "Desplegar", exact: true }).click();
+  await expect(form.getByLabel("Dominio", { exact: true })).toBeFocused();
+  await form.getByLabel("Dominio", { exact: true }).fill("www");
+  await expect(form.getByText("Ese dominio está reservado. Elige otro.")).toBeVisible();
+  await form.getByLabel("Dominio", { exact: true }).fill("Mala_");
+  await expect(form.getByText(/Usa de 2 a 40 caracteres: minúsculas/)).toBeVisible();
+  await form.getByLabel("Dominio", { exact: true }).fill("libre");
+  await expect(form.getByText("Se abrirá en http://libre.localhost:7321")).toBeVisible();
+  expect(posts).toEqual([]);
+});
+
+test("a domain the server still rejects returns to the field with the draft kept, and Deploy then continues", async ({ page }) => {
+  const saves: Record<string, unknown>[] = [];
+  const services: unknown[] = [];
+  let reject = true;
+  await openNewForm(page);
+  const running = { application_id: "app9", operation_id: "initial", revision: 1, phase: "observed", observation: "running", version: 1, access: "local", domain: "otro" };
+  await page.route("**/api/v1/worker/applications", route => {
+    if (route.request().method() !== "POST") return route.fulfill({ json: [] });
+    saves.push(route.request().postDataJSON());
+    return reject ? route.fulfill({ status: 409, json: { error: "taken", code: "domain_taken" } }) : route.fulfill({ status: 201, json: { ...lockedApp(), id: "app9", name: "web", image: digest, access: "local", domain: "otro" } });
+  });
+  await page.route("**/api/v1/worker/config/app9", route => route.fulfill({ json: { revision: 0, variables: [] } }));
+  await page.route("**/api/v1/worker/applications/app9/service**", route => {
+    if (route.request().url().endsWith("/refresh")) return route.fulfill({ json: running });
+    if (route.request().method() === "POST") { services.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: running }); }
+    return route.fulfill({ json: running });
+  });
+  const form = page.getByRole("region", { name: "Definición desde imagen" });
+  await form.getByLabel("Nombre", { exact: true }).fill("web");
+  await form.getByLabel("Imagen", { exact: true }).fill(digest);
+  await form.getByText("Más opciones", { exact: true }).click();
+  await form.getByLabel("Acceso", { exact: true }).selectOption("local");
+  await form.getByLabel("Puerto", { exact: true }).fill("8081");
+  await form.getByRole("button", { name: "Desplegar", exact: true }).click();
+  await expect(form.getByText("Ese dominio ya lo usa otra aplicación. Elige otro.")).toBeVisible();
+  await expect(form.getByLabel("Dominio", { exact: true })).toBeFocused();
+  await expect(form.getByLabel("Nombre", { exact: true })).toHaveValue("web");
+  await expect(form.getByLabel("Imagen", { exact: true })).toHaveValue(digest);
+  await expect(form.getByLabel("Puerto", { exact: true })).toHaveValue("8081");
+  await expect(form.getByRole("button", { name: "Reintentar" })).toHaveCount(0);
+  await expect(form.getByRole("button", { name: "Desplegar", exact: true })).toBeVisible();
+  expect(await violations(page)).toEqual([]);
+  reject = false;
+  await form.getByLabel("Dominio", { exact: true }).fill("otro");
+  await form.getByRole("button", { name: "Desplegar", exact: true }).click();
+  await expect(page).toHaveURL(/\/apps\/definition\/app9$/, { timeout: 15_000 });
+  expect(saves).toEqual([
+    { name: "web", image: digest, port: 8081, access: "local", shared_network: false, domain: "web" },
+    { name: "web", image: digest, port: 8081, access: "local", shared_network: false, domain: "otro" },
+  ]);
+  expect(services).toEqual([{ revision: 0 }]);
+});
+
+test("a network error while creating the service can be retried and resumes", async ({ page }) => {
+  const services: unknown[] = [];
+  let code = "network_unavailable";
+  await openNewForm(page);
+  const running = { application_id: "app9", operation_id: "initial", revision: 1, phase: "observed", observation: "running", version: 1, access: "internal", domain: null };
+  let created = false;
+  await page.route("**/api/v1/worker/applications", route => route.request().method() === "POST"
+    ? route.fulfill({ status: 201, json: { ...lockedApp(), id: "app9", name: "api", image: digest, access: "internal" } })
+    : route.fulfill({ json: [] }));
+  await page.route("**/api/v1/worker/config/app9", route => route.fulfill({ json: { revision: 0, variables: [] } }));
+  await page.route("**/api/v1/worker/applications/app9/service**", route => {
+    if (route.request().url().endsWith("/refresh")) return route.fulfill({ json: running });
+    if (route.request().method() === "POST") {
+      services.push(route.request().postDataJSON());
+      if (code) return route.fulfill({ status: code === "network_unavailable" ? 503 : 409, json: { error: "x", code } });
+      created = true;
+      return route.fulfill({ status: 201, json: running });
+    }
+    return created ? route.fulfill({ json: running }) : route.fulfill({ status: 404, json: { error: "x" } });
+  });
+  const form = page.getByRole("region", { name: "Definición desde imagen" });
+  await form.getByLabel("Nombre", { exact: true }).fill("api");
+  await form.getByLabel("Imagen", { exact: true }).fill(digest);
+  await form.getByText("Más opciones", { exact: true }).click();
+  await form.getByLabel("Acceso", { exact: true }).selectOption("internal");
+  await form.getByRole("button", { name: "Desplegar", exact: true }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "No se ha podido crear la red" })).toBeVisible();
+  await expect(page.getByText(/No se ha podido confirmar el resultado/)).toHaveCount(0);
+  code = "";
+  await page.getByRole("button", { name: "Reintentar" }).click();
+  await expect(page).toHaveURL(/\/apps\/definition\/app9$/, { timeout: 15_000 });
+  expect(services).toEqual([{ revision: 0 }, { revision: 0 }]);
+});
+
+const service = (observation: string, extra: object = {}) => ({ application_id: "app1", operation_id: "initial", revision: 1, phase: "observed", observation, version: 1, access: "local", domain: "bitacora", ...extra });
+async function openDetail(page: Page, { observation = "running", appsPort = 7321 as number | null, app = {} as object, svc = {} as object } = {}) {
+  await mockExperimental(page, [{ ...lockedApp(), service_used: true, access: "local", shared_network: false, domain: "bitacora", ...app }]);
+  await mockCapabilities(page, appsPort ?? undefined);
+  await page.route("**/api/v1/worker/config/app1", route => route.fulfill({ json: { revision: 1, variables: [] } }));
+  await page.route("**/api/v1/worker/applications/app1/service**", route => route.fulfill({ json: service(observation, svc) }));
+  await page.goto("/apps/definition/app1");
+  await signIn(page);
+}
+
+test("a running local service opens at exactly the domain and the proxy port, in a new tab", async ({ page }) => {
+  await openDetail(page);
+  const open = page.getByRole("link", { name: "Abrir" });
+  await expect(open).toHaveAttribute("href", "http://bitacora.localhost:7321");
+  await expect(open).toHaveAttribute("target", "_blank");
+  await expect(open).toHaveAttribute("rel", /noopener/);
+  await expect(open).toHaveAttribute("rel", /noreferrer/);
+  await expect(page.getByText("Abierta en este equipo · bitacora.localhost")).toBeVisible();
+  await expect(page.getByText(/127\.0\.0\.1/)).toHaveCount(0);
+  expect(await violations(page)).toEqual([]);
+});
+
+test("a stopped local service has no link", async ({ page }) => {
+  await openDetail(page, { observation: "stopped" });
+  await expect(page.getByRole("button", { name: "Eliminar servicio" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Abrir" })).toHaveCount(0);
+  await expect(page.getByText("Abierta en este equipo · bitacora.localhost")).toBeVisible();
+});
+
+test("without the address listener there is no dead link, and the page says why", async ({ page }) => {
+  await openDetail(page, { appsPort: null });
+  await expect(page.getByRole("button", { name: "Parar servicio" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Abrir" })).toHaveCount(0);
+  await expect(page.getByText(/El oyente de direcciones del servidor está apagado/).first()).toBeVisible();
+  expect(await violations(page)).toEqual([]);
+});
+
+test("an internal service shows its internal name and an isolated one says it is isolated", async ({ page }) => {
+  await openDetail(page, { app: { access: "internal", domain: null }, svc: { access: "internal", domain: null } });
+  await expect(page.getByText("Red interna · http://bitacora:8080")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Abrir" })).toHaveCount(0);
+});
+
+test("an isolated service header says it is not published", async ({ page }) => {
+  await openDetail(page, { app: { access: "isolated", domain: null }, svc: { access: "isolated", domain: null } });
+  await expect(page.getByText("Aislada · puerto 8080, sin publicar")).toBeVisible();
+});
+
+test("the deployed access wins over what is saved", async ({ page }) => {
+  await openDetail(page, { app: { access: "internal", domain: null }, svc: { access: "local", domain: "desplegada" } });
+  await expect(page.getByRole("link", { name: "Abrir" })).toHaveAttribute("href", "http://desplegada.localhost:7321");
+});
+
+test("settings lock access, network, domain and port once a service exists, and explain why", async ({ page }) => {
+  await mockExperimental(page, [{ ...lockedApp(), service_used: true, access: "local", shared_network: true, domain: "bitacora", project_id: "p1" }]);
+  await mockCapabilities(page);
+  await page.route("**/api/v1/worker/projects", route => route.fulfill({ json: [{ id: "p1", name: "Taller", color: "teal", version: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }] }));
+  await page.route("**/api/v1/worker/applications/app1/service**", route => route.fulfill({ json: service("running") }));
+  await page.goto("/apps/definition/app1/settings");
+  await signIn(page);
+  await expect(page.getByLabel("Acceso", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Acceso", { exact: true })).toHaveValue("local");
+  await expect(page.getByLabel("Conectar también a la red común")).toBeDisabled();
+  await expect(page.getByLabel("Conectar también a la red común")).toBeChecked();
+  await expect(page.getByLabel("Dominio", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Dominio", { exact: true })).toHaveValue("bitacora");
+  await expect(page.getByLabel("Puerto", { exact: true })).toBeDisabled();
+  await expect(page.getByText(/se fijaron al desplegar/)).toBeVisible();
+  await expect(page.getByText(/mover la aplicación de proyecto no cambia la de su servicio en marcha/)).toBeVisible();
+  expect(await violations(page)).toEqual([]);
+});
+
+test("settings of an isolated application with a service keep the port editable and show no project note", async ({ page }) => {
+  await mockExperimental(page, [{ ...lockedApp(), service_used: true }]);
+  await mockCapabilities(page);
+  await page.route("**/api/v1/worker/applications/app1/service**", route => route.fulfill({ json: service("running", { access: "isolated", domain: null }) }));
+  await page.goto("/apps/definition/app1/settings");
+  await signIn(page);
+  await expect(page.getByLabel("Acceso", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Puerto", { exact: true })).toBeEnabled();
+  await expect(page.getByText(/mover la aplicación de proyecto/)).toHaveCount(0);
+});
+
+test("settings change access with all fields, report a refused domain on its field and handle access_locked", async ({ page }) => {
+  const patches: unknown[] = [];
+  let reply: { status: number; json: unknown } = { status: 409, json: { error: "x", code: "domain_taken" } };
+  await mockExperimental(page, [lockedApp()]);
+  await mockCapabilities(page);
+  await page.route("**/api/v1/worker/applications/app1", route => {
+    if (route.request().method() !== "PATCH") return route.fulfill({ json: lockedApp() });
+    patches.push(route.request().postDataJSON());
+    return route.fulfill(reply);
+  });
+  await page.goto("/apps/definition/app1/settings");
+  await signIn(page);
+  await expect(page.getByLabel("Acceso", { exact: true })).toBeEnabled();
+  await expect(page.getByLabel("Acceso", { exact: true })).toHaveValue("isolated");
+  await page.getByLabel("Acceso", { exact: true }).selectOption("local");
+  await expect(page.getByLabel("Dominio", { exact: true })).toHaveValue("bitacora");
+  await page.getByRole("button", { name: "Guardar cambios" }).click();
+  await expect(page.getByText("Ese dominio ya lo usa otra aplicación. Elige otro.")).toBeVisible();
+  await expect(page.getByLabel("Dominio", { exact: true })).toBeFocused();
+  expect(patches).toEqual([{ version: 1, image: lockedApp().image, port: 8080, access: "local", shared_network: false, domain: "bitacora" }]);
+
+  reply = { status: 409, json: { error: "x", code: "access_locked" } };
+  await page.getByLabel("Dominio", { exact: true }).fill("otra");
+  await page.getByRole("button", { name: "Guardar cambios" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "ya no se pueden cambiar porque la aplicación tiene un servicio" })).toBeVisible();
+
+  reply = { status: 409, json: { error: "x", code: "update_conflict" } };
+  await page.getByLabel("Dominio", { exact: true }).fill("otra2");
+  await page.getByRole("button", { name: "Guardar cambios" }).click();
+  await expect(page.getByRole("button", { name: "Recargar" })).toBeVisible();
+});
+
+test("settings send nothing about the network when only the port changes", async ({ page }) => {
+  const patches: unknown[] = [];
+  await mockExperimental(page, [{ ...lockedApp(), access: "internal" }]);
+  await mockCapabilities(page);
+  await page.route("**/api/v1/worker/applications/app1", route => {
+    if (route.request().method() !== "PATCH") return route.fulfill({ json: lockedApp() });
+    patches.push(route.request().postDataJSON());
+    return route.fulfill({ json: { ...lockedApp(), access: "internal", port: 9000 } });
+  });
+  await page.goto("/apps/definition/app1/settings");
+  await signIn(page);
+  await page.getByLabel("Puerto", { exact: true }).fill("9000");
+  await page.getByRole("button", { name: "Guardar cambios" }).click();
+  await expect(page.getByText("Ajustes guardados")).toBeVisible();
+  expect(patches).toEqual([{ version: 1, image: lockedApp().image, port: 9000 }]);
+});
+
+test("the access states read in English with no Spanish left", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("darsena.locale", "en"));
+  await openNewForm(page);
+  await page.route(/\/api\/v1\/worker\/domains\/check/, route => route.fulfill({ json: { available: false, reason: "taken" } }));
+  const form = page.getByRole("region", { name: "Definition from an image" });
+  await form.getByLabel("Name", { exact: true }).fill("web");
+  await form.getByLabel("Image", { exact: true }).fill(digest);
+  await form.getByText("More options", { exact: true }).click();
+  await form.getByLabel("Access", { exact: true }).selectOption("local");
+  await expect(form.getByText("Another application already uses that domain. Choose another.")).toBeVisible();
+  await expect(form.getByText(/has no authentication: any program on this computer/)).toBeVisible();
+  await expectEnglish(page);
+  expect(await violations(page)).toEqual([]);
+
+  await openDetail(page);
+  await expect(page.getByRole("link", { name: "Open" })).toHaveAttribute("href", "http://bitacora.localhost:7321");
+  await expect(page.getByText("Open on this computer · bitacora.localhost")).toBeVisible();
+  await expectEnglish(page);
 });

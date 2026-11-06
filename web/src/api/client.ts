@@ -10,6 +10,7 @@ export type Project = components["schemas"]["WorkerProject"];
 export type ProjectInput = components["schemas"]["WorkerProjectInput"];
 export type HistoryEntry = components["schemas"]["ConfigHistoryEntry"];
 export type ImageCheck = components["schemas"]["ImageCheck"];
+export type Access = components["schemas"]["WorkerApplication"]["access"];
 /** Stable identifiers, not UI text: they are translated at render time (see i18n/errors.ts). */
 export const clientErrors = {
   loginFailed: "client:login_failed",
@@ -45,7 +46,7 @@ async function serviceRequest(id: string, action: "get" | "create" | "refresh" |
   const headers: Record<string, string> = {};
   if (sessionToken) headers["X-Darsena-CSRF"] = sessionToken;
   if (action === "create" || action === "stop" || action === "remove") headers["Content-Type"] = "application/json";
-  const body = action === "create" ? { revision, acknowledge_no_network: true } : action === "stop" ? { version: revision } : action === "remove" ? { version: revision, acknowledge_remove: true } : undefined;
+  const body = action === "create" ? { revision } : action === "stop" ? { version: revision } : action === "remove" ? { version: revision, acknowledge_remove: true } : undefined;
   const response = await fetch(url, { method: action === "get" ? "GET" : "POST", headers, ...(body ? { body: JSON.stringify(body) } : {}) });
   if (response.status === 401) setSession(null);
   if (!response.ok) {
@@ -121,6 +122,8 @@ export const api = {
   workerAssign: async (body: components["schemas"]["WorkerAssignInput"]) =>
     unwrap(await client.POST("/worker/applications/assign", { body })),
   workerImage: async (ref: string) => unwrap(await client.GET("/worker/image", { params: { query: { ref } } })),
+  workerDomainCheck: async (name: string, application?: string) =>
+    unwrap(await client.GET("/worker/domains/check", { params: { query: { name, ...(application ? { application } : {}) } } })),
   workerImagePull: async (reference: string) => unwrap(await client.POST("/worker/image/pull", { body: { reference } })),
   workerAppUpdate: async (id: string, body: components["schemas"]["WorkerApplicationUpdate"]) =>
     unwrap(await client.PATCH("/worker/applications/{id}", { params: { path: { id } }, body })),
