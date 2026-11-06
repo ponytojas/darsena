@@ -3,7 +3,7 @@
   "info": {
     "title": "Dársena local demo API",
     "version": "0.1.0",
-    "description": "Volatile localhost-only demonstration. No infrastructure effects or authentication. Not a production API."
+    "description": "Local demonstration and explicitly configured experimental isolated services. Experimental routes require owner authentication. Not a production API."
   },
   "servers": [
     {
@@ -11,6 +11,91 @@
     }
   ],
   "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "getLiveness",
+        "responses": {
+          "200": {
+            "description": "The server process responds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "status"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "alive"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "getReadiness",
+        "responses": {
+          "200": {
+            "description": "The demo and its configured worker are available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "mode",
+                    "worker"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "demo"
+                      ]
+                    },
+                    "worker": {
+                      "type": "string",
+                      "enum": [
+                        "disabled",
+                        "ready",
+                        "unavailable"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configured worker is unavailable"
+          }
+        }
+      }
+    },
+    "/capabilities": {
+      "get": {
+        "operationId": "getCapabilities",
+        "responses": {
+          "200": {
+            "description": "Current demo capabilities and bounded dependency availability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/status": {
       "get": {
         "operationId": "getStatus",
@@ -381,6 +466,2296 @@
           }
         }
       }
+    },
+    "/worker/jobs": {
+      "post": {
+        "operationId": "enqueueSimulatedWorkerJob",
+        "description": "Experimental local worker: simulations only. Requires serve --worker-socket. Independent of in-memory application demo.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Worker response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerJob"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listWorkerJobs",
+        "description": "List up to 100 latest persistent simulated worker jobs.",
+        "responses": {
+          "200": {
+            "description": "Jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkerJob"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Worker unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/jobs/{id}": {
+      "get": {
+        "operationId": "getWorkerJob",
+        "description": "Read a persistent simulated worker job.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Worker response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerJob"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/config/{resource}": {
+      "get": {
+        "operationId": "getWorkerConfig",
+        "description": "Experimental; requires a worker with encrypted configuration enabled. Secrets are never returned.",
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/config/{resource}/history": {
+      "get": {
+        "operationId": "getWorkerConfigHistory",
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "summary": "List retained configuration revisions",
+        "description": "Value-free history, newest first. An existing application without configuration returns an empty list. Old revisions may retain secrets in the vault, but they are never returned."
+      }
+    },
+    "/worker/config/{resource}/variables/{name}": {
+      "put": {
+        "operationId": "setWorkerConfigVariable",
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetConfigVariable"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWorkerConfigVariable",
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteConfigVariable"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/applications": {
+      "get": {
+        "operationId": "listWorkerApplications",
+        "description": "Persistent definitions with project, configuration and (experimental) service summary; no deployment is performed.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkerApplicationSummary"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkerApplication",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerApplicationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerApplication"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "Creates a definition. Domain errors: 409 domain_taken (never reassigned or suffixed), 400 domain_reserved, 400 invalid_domain."
+      }
+    },
+    "/worker/applications/{id}": {
+      "get": {
+        "operationId": "getWorkerApplication",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerApplicationSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateWorkerApplication",
+        "description": "Edits image, port, access, shared network and domain with a version precondition. The image is locked (409 image_locked) once any runtime intention exists; access, shared network, domain and, unless the application is isolated, the port are locked likewise (409 access_locked). 409 runtime_state_unknown if that cannot be determined. Domain errors: 409 domain_taken, 400 domain_reserved, 400 invalid_domain.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerApplicationUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerApplication"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWorkerApplication",
+        "description": "Deletes the definition and purges its encrypted configuration. 409 application_has_service, runtime_busy or runtime_state_unknown block it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/health": {
+      "get": {
+        "operationId": "getWorkerHealth",
+        "responses": {
+          "200": {
+            "description": "Worker capabilities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerHealth"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/applications/{id}/service": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Read experimental service state",
+        "responses": {
+          "200": {
+            "description": "Current persisted service operation state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "401": {
+            "description": "Owner session required"
+          },
+          "403": {
+            "description": "Session token required"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create the service once; network access follows the application's access setting",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "revision"
+                ],
+                "properties": {
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Configuration revision the client saw; 0 means no saved configuration, and an empty first revision is saved before dispatching."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Current persisted service operation state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Current persisted service operation state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Current persisted service operation state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request; image_incompatible, invalid_image or invalid_domain are rejected before anything is persisted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Owner session required"
+          },
+          "403": {
+            "description": "Origin or token rejected"
+          },
+          "409": {
+            "description": "Conflict. revision_conflict_before_dispatch, image_missing and network_conflict are rejected before anything is persisted; other conflicts do not guarantee absence of an existing operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker unavailable; runtime_unavailable if image availability or networks could not be checked, network_unavailable if the daemon has no address space for a new network (nothing persisted in either case)"
+          }
+        }
+      }
+    },
+    "/worker/applications/{id}/service/refresh": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Inspect an existing service without resending creation",
+        "responses": {
+          "200": {
+            "description": "Current persisted service operation state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "503": {
+            "description": "Worker unavailable"
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "summary": "Start a local owner session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "credential"
+                ],
+                "properties": {
+                  "credential": {
+                    "type": "string",
+                    "format": "password"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session cookie and in-memory token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "csrf"
+                  ],
+                  "properties": {
+                    "csrf": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credential"
+          },
+          "403": {
+            "description": "Origin rejected"
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "summary": "Revoke the current owner session",
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "401": {
+            "description": "Session required"
+          },
+          "403": {
+            "description": "Origin or token rejected"
+          }
+        }
+      }
+    },
+    "/worker/applications/{id}/service/stop": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Stop an isolated service once; reconcile uncertain results before any further action",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Persisted service and action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Persisted service and action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "401": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "403": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "404": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "409": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "503": {
+            "description": "Request rejected or outcome unavailable"
+          }
+        }
+      }
+    },
+    "/worker/applications/{id}/service/remove": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Remove an isolated service once; reconcile uncertain results before any further action",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "acknowledge_remove"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 1
+                  },
+                  "acknowledge_remove": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Persisted service and action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Persisted service and action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentalService"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "401": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "403": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "404": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "409": {
+            "description": "Request rejected or outcome unavailable"
+          },
+          "503": {
+            "description": "Request rejected or outcome unavailable"
+          }
+        }
+      }
+    },
+    "/worker/projects": {
+      "get": {
+        "operationId": "listWorkerProjects",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkerProject"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWorkerProject",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerProjectInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerProject"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/projects/{id}": {
+      "patch": {
+        "operationId": "updateWorkerProject",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerProjectUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerProject"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWorkerProject",
+        "description": "Never deletes applications; they become unassigned.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerProjectDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/applications/assign": {
+      "post": {
+        "operationId": "assignWorkerApplications",
+        "description": "Moves applications to a project (or unassigns with a null project_id), all or nothing. Returns those actually reassigned.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerAssignInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkerAssignResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/config/{resource}/variables/{name}/restore": {
+      "post": {
+        "operationId": "restoreWorkerConfigVariable",
+        "summary": "Restore a variable from a retained revision",
+        "description": "Saves the value and secret flag of one variable from a retained revision as a new revision. Returns the value-free current snapshot. Errors: configuration_conflict (409, stale revision), revision_not_retained (409), variable_not_in_revision (409), invalid_configuration (400).",
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreConfigVariable"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/image": {
+      "get": {
+        "summary": "Normalize an image reference; in experimental mode also resolve a public tag and report availability in the runtime daemon",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 512
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Canonical reference and availability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageCheck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_image, or image_digest_required without the experimental runtime",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "image_not_found: tag not found in a public registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "registry_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/worker/image/pull": {
+      "post": {
+        "summary": "Explicitly download a pinned public image into the runtime daemon, without registry credentials (experimental only; one at a time; status through GET /worker/image)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "reference"
+                ],
+                "properties": {
+                  "reference": {
+                    "type": "string",
+                    "maxLength": 512
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Already present",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageCheck"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Download started or already running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageCheck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_image",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Owner session required"
+          },
+          "403": {
+            "description": "Origin or token rejected; always in demo mode"
+          },
+          "409": {
+            "description": "pull_busy: another image is downloading",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Worker unavailable"
+          }
+        }
+      }
+    },
+    "/worker/domains/check": {
+      "get": {
+        "operationId": "checkWorkerDomain",
+        "summary": "Advisory check of a domain; the unique index decides when an application is saved",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            }
+          },
+          {
+            "name": "application",
+            "in": "query",
+            "required": false,
+            "description": "Application whose own domain is not reported as taken.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Availability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainCheck"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -455,6 +2830,9 @@
           "message"
         ],
         "properties": {
+          "key": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
@@ -556,6 +2934,9 @@
           },
           "error": {
             "type": "string"
+          },
+          "error_code": {
+            "type": "string"
           }
         }
       },
@@ -637,6 +3018,101 @@
         "properties": {
           "error": {
             "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code. Worker codes include: invalid_configuration, configuration_conflict, configuration_unavailable, revision_not_retained, variable_not_in_revision, project_name_taken, project_not_found, project_limit, invalid_project, application_not_found, invalid_application, update_conflict, image_locked, application_has_service, runtime_busy, runtime_state_unknown, invalid_image, image_digest_required, image_not_found, registry_unavailable, pull_busy, image_missing, image_incompatible, runtime_unavailable, domain_taken, domain_reserved, invalid_domain, access_locked, network_unavailable, network_conflict."
+          }
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "required": [
+          "mode",
+          "real_execution",
+          "worker",
+          "state",
+          "vault"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "demo",
+              "experimental"
+            ]
+          },
+          "real_execution": {
+            "type": "object",
+            "required": [
+              "enabled",
+              "provider",
+              "configuration"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "provider": {
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "unavailable",
+                  "ready"
+                ]
+              },
+              "configuration": {
+                "type": "string",
+                "enum": [
+                  "not_applied",
+                  "accepted_revision"
+                ]
+              }
+            }
+          },
+          "worker": {
+            "type": "object",
+            "required": [
+              "configured",
+              "status"
+            ],
+            "properties": {
+              "configured": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "ready",
+                  "unavailable"
+                ]
+              }
+            }
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "ready",
+              "unavailable",
+              "unknown"
+            ]
+          },
+          "vault": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "ready",
+              "unavailable",
+              "unknown"
+            ]
+          },
+          "apps_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "Port of the application listener; present only when it is enabled. Open an application at http://<domain>.localhost:<apps_port>, never by 127.0.0.1 and a port, which would send the owner cookie."
           }
         }
       },
@@ -645,7 +3121,8 @@
         "additionalProperties": false,
         "required": [
           "mode",
-          "persistent"
+          "persistent",
+          "worker_enabled"
         ],
         "properties": {
           "mode": {
@@ -659,6 +3136,884 @@
             "enum": [
               false
             ]
+          },
+          "worker_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WorkerRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "resource_id",
+          "idempotency_key"
+        ],
+        "properties": {
+          "resource_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      },
+      "WorkerJob": {
+        "type": "object",
+        "required": [
+          "id",
+          "resource_id",
+          "kind",
+          "status",
+          "error",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "simulation"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ConfigVariable": {
+        "type": "object",
+        "required": [
+          "name",
+          "secret"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "description": "Only included for non-secret values."
+          },
+          "secret": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConfigSnapshot": {
+        "type": "object",
+        "required": [
+          "revision",
+          "variables"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "variables": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigVariable"
+            }
+          }
+        }
+      },
+      "SetConfigVariable": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "value",
+          "secret"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "value": {
+            "type": "string",
+            "description": "Value to store. Secret values are never returned."
+          },
+          "secret": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeleteConfigVariable": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "WorkerApplication": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "image",
+          "port",
+          "created_at",
+          "project_id",
+          "version",
+          "updated_at",
+          "service_used",
+          "access",
+          "shared_network",
+          "domain"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "project_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "Owning project, or null when unassigned."
+          },
+          "version": {
+            "type": "integer",
+            "description": "Precondition token for edits; unchanged by moving between projects."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "service_used": {
+            "type": "boolean",
+            "description": "Permanent mark: a runtime service was once requested, so the application cannot be deleted nor change image. Written before dispatch, in any mode."
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "internal",
+              "local"
+            ],
+            "description": "Network access. isolated (default): no network. internal: bridge network shared with the project's applications, nothing published. local: internal plus a loopback port reachable at http://<domain>.localhost:<apps_port>."
+          },
+          "shared_network": {
+            "type": "boolean",
+            "description": "Also join the common network. Not allowed when isolated."
+          },
+          "domain": {
+            "type": "string",
+            "nullable": true,
+            "description": "Lowercase DNS label (2-40 characters, a-z, 0-9 and hyphen, starting with a letter) under .localhost. Only for local access, unique across applications, never reassigned."
+          }
+        }
+      },
+      "WorkerApplicationInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "image",
+          "port"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "internal",
+              "local"
+            ],
+            "description": "Network access. isolated (default): no network. internal: bridge network shared with the project's applications, nothing published. local: internal plus a loopback port reachable at http://<domain>.localhost:<apps_port>."
+          },
+          "shared_network": {
+            "type": "boolean",
+            "description": "Also join the common network. Not allowed when isolated."
+          },
+          "domain": {
+            "type": "string",
+            "description": "Only for local access; defaults to the application name when omitted or empty. If that name is not a valid domain the request fails with invalid_domain."
+          }
+        }
+      },
+      "WorkerHealth": {
+        "type": "object",
+        "required": [
+          "mode",
+          "config_enabled"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "simulation"
+            ]
+          },
+          "config_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ExperimentalService": {
+        "type": "object",
+        "required": [
+          "application_id",
+          "operation_id",
+          "revision",
+          "phase",
+          "observation",
+          "version",
+          "access",
+          "domain"
+        ],
+        "properties": {
+          "application_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "prepared",
+              "dispatched",
+              "observed"
+            ]
+          },
+          "observation": {
+            "type": "string",
+            "enum": [
+              "",
+              "absent",
+              "created",
+              "running",
+              "stopped",
+              "conflict",
+              "unavailable",
+              "unknown"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "action": {
+            "type": "object",
+            "required": [
+              "kind",
+              "phase",
+              "observation"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "stop",
+                  "remove",
+                  "unknown"
+                ]
+              },
+              "phase": {
+                "type": "string",
+                "enum": [
+                  "dispatched",
+                  "observed"
+                ]
+              },
+              "observation": {
+                "type": "string",
+                "enum": [
+                  "",
+                  "absent",
+                  "created",
+                  "running",
+                  "stopped",
+                  "conflict",
+                  "unavailable",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          "exit_code": {
+            "type": "integer",
+            "description": "Exit status of a stopped container; only present in the response to an inspection (refresh), not persisted."
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "internal",
+              "local"
+            ],
+            "description": "Access the service was requested with."
+          },
+          "domain": {
+            "type": "string",
+            "nullable": true,
+            "description": "Name under .localhost for local access, otherwise null. The host port is never exposed; the interface composes the URL from this and capabilities.apps_port."
+          }
+        }
+      },
+      "WorkerProject": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "color",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string",
+            "enum": [
+              "blue",
+              "cyan",
+              "teal",
+              "green",
+              "lime",
+              "orange",
+              "rust",
+              "red",
+              "rose",
+              "violet",
+              "indigo",
+              "slate"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorkerProjectInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "color"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string",
+            "enum": [
+              "blue",
+              "cyan",
+              "teal",
+              "green",
+              "lime",
+              "orange",
+              "rust",
+              "red",
+              "rose",
+              "violet",
+              "indigo",
+              "slate"
+            ]
+          }
+        }
+      },
+      "WorkerProjectUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "name",
+          "color"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string",
+            "enum": [
+              "blue",
+              "cyan",
+              "teal",
+              "green",
+              "lime",
+              "orange",
+              "rust",
+              "red",
+              "rose",
+              "violet",
+              "indigo",
+              "slate"
+            ]
+          }
+        }
+      },
+      "WorkerProjectDeleted": {
+        "type": "object",
+        "required": [
+          "project",
+          "application_ids"
+        ],
+        "properties": {
+          "project": {
+            "$ref": "#/components/schemas/WorkerProject"
+          },
+          "application_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Former members, now unassigned; use to undo."
+          }
+        }
+      },
+      "WorkerApplicationUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "image",
+          "port"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "image": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "internal",
+              "local"
+            ],
+            "description": "Network access. isolated (default): no network. internal: bridge network shared with the project's applications, nothing published. local: internal plus a loopback port reachable at http://<domain>.localhost:<apps_port>."
+          },
+          "shared_network": {
+            "type": "boolean",
+            "description": "Also join the common network. Not allowed when isolated."
+          },
+          "domain": {
+            "type": "string",
+            "description": "Only for local access. Omit access, shared_network and domain to keep them; otherwise omitted fields keep their stored value, leaving local clears the domain and entering local without one defaults it to the name."
+          }
+        }
+      },
+      "WorkerAssignInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "project_id",
+          "application_ids"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "application_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500
+          },
+          "only_unassigned": {
+            "type": "boolean"
+          }
+        }
+      },
+      "WorkerAssignResult": {
+        "type": "object",
+        "required": [
+          "applications"
+        ],
+        "properties": {
+          "applications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkerApplication"
+            }
+          }
+        }
+      },
+      "WorkerApplicationSummary": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WorkerApplication"
+          },
+          {
+            "type": "object",
+            "description": "Application plus configuration and service summary, computed with a fixed number of queries. The last change is max(updated_at, config.updated_at); the service has no dates.",
+            "required": [
+              "config",
+              "config_unavailable",
+              "service",
+              "service_unavailable"
+            ],
+            "properties": {
+              "config": {
+                "type": "object",
+                "nullable": true,
+                "description": "Current encrypted configuration revision; never values. Null without configuration or when unavailable.",
+                "required": [
+                  "revision",
+                  "updated_at"
+                ],
+                "properties": {
+                  "revision": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "updated_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "nullable": true,
+                    "description": "Null for revisions written before dates were recorded."
+                  }
+                }
+              },
+              "config_unavailable": {
+                "type": "boolean",
+                "description": "The configuration store could not be read."
+              },
+              "service": {
+                "type": "object",
+                "nullable": true,
+                "description": "Experimental service state; null without the experimental runtime or without a service, or when unavailable.",
+                "required": [
+                  "phase",
+                  "observation",
+                  "version"
+                ],
+                "properties": {
+                  "phase": {
+                    "type": "string",
+                    "enum": [
+                      "prepared",
+                      "dispatched",
+                      "observed"
+                    ]
+                  },
+                  "observation": {
+                    "type": "string",
+                    "enum": [
+                      "",
+                      "absent",
+                      "created",
+                      "running",
+                      "stopped",
+                      "conflict",
+                      "unavailable",
+                      "unknown"
+                    ]
+                  },
+                  "version": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 1
+                  },
+                  "action": {
+                    "type": "object",
+                    "required": [
+                      "kind",
+                      "phase",
+                      "observation"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "stop",
+                          "remove",
+                          "unknown"
+                        ]
+                      },
+                      "phase": {
+                        "type": "string",
+                        "enum": [
+                          "dispatched",
+                          "observed"
+                        ]
+                      },
+                      "observation": {
+                        "type": "string",
+                        "enum": [
+                          "",
+                          "absent",
+                          "created",
+                          "running",
+                          "stopped",
+                          "conflict",
+                          "unavailable",
+                          "unknown"
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "service_unavailable": {
+                "type": "boolean",
+                "description": "Experimental runtime enabled but this application's service state could not be read (store failure or an invalid intention row). Per item, so a bare array response is kept."
+              }
+            }
+          }
+        ]
+      },
+      "ConfigHistory": {
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "description": "Retained revisions, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/ConfigHistoryEntry"
+            }
+          }
+        }
+      },
+      "ConfigHistoryEntry": {
+        "type": "object",
+        "required": [
+          "revision",
+          "created_at",
+          "base",
+          "changes"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Null when the revision predates date recording."
+          },
+          "base": {
+            "type": "boolean",
+            "description": "Oldest retained revision: its changes list every variable as added."
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigHistoryChange"
+            }
+          }
+        }
+      },
+      "ConfigHistoryChange": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "secret"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "added",
+              "changed",
+              "removed"
+            ]
+          },
+          "secret": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RestoreConfigVariable": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "from_revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "Current revision (precondition)."
+          },
+          "from_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "description": "Retained revision to read the variable from."
+          }
+        }
+      },
+      "ImageCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reference",
+          "status"
+        ],
+        "properties": {
+          "reference": {
+            "type": "string",
+            "description": "Canonical registry/name[:tag]@sha256:digest form to save; the tag is kept for display and the digest decides what runs."
+          },
+          "resolved_from": {
+            "type": "string",
+            "description": "name:tag resolved to the digest through the public registry (experimental mode only)."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_checked",
+              "available",
+              "missing",
+              "pulling",
+              "pull_failed",
+              "incompatible",
+              "unknown"
+            ],
+            "description": "not_checked without the experimental runtime; unknown if the daemon could not be asked."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "platform",
+              "volumes",
+              "not_found",
+              "timeout",
+              "unavailable"
+            ],
+            "description": "For incompatible: platform or volumes. For pull_failed: platform, not_found, timeout or unavailable."
+          },
+          "platform": {
+            "type": "string",
+            "description": "os/arch of the local image"
+          },
+          "daemon_platform": {
+            "type": "string",
+            "description": "os/arch of the runtime daemon"
+          },
+          "exposed_port": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65535,
+            "description": "Lowest TCP port the image declares with EXPOSE; absent if none or unknown. Use it to suggest local access and the port."
+          }
+        }
+      },
+      "DomainCheck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "taken",
+              "reserved",
+              "invalid"
+            ],
+            "description": "Present when not available."
           }
         }
       }

@@ -1,0 +1,391 @@
+.applications-page {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+.apps-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.apps-summary dl {
+  display: contents;
+}
+.apps-summary dl > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.apps-summary dt {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.apps-summary dd {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.apps-summary [data-zero="true"] dd {
+  color: var(--muted-foreground);
+  font-weight: 450;
+}
+.apps-summary [data-tone="attention"]:not([data-zero="true"]) dd {
+  color: var(--destructive);
+}
+.apps-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.apps-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.apps-chips button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 450;
+  cursor: pointer;
+}
+.apps-chips button:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.apps-chips button[aria-pressed="true"] {
+  background: var(--secondary);
+  color: var(--foreground);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.apps-chips button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.apps-chips button span {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.apps-loading {
+  display: grid;
+  gap: 8px;
+}
+.apps-groups {
+  display: grid;
+  gap: 20px;
+}
+.apps-group-heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.apps-group-heading button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 6px 0 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+.apps-group-heading button:hover {
+  color: var(--foreground);
+}
+.apps-group-heading button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.apps-group-heading svg {
+  width: 14px;
+  height: 14px;
+}
+.apps-group-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 450;
+}
+.apps-header,
+.app-row {
+  display: grid;
+  grid-template-columns: 4px minmax(0, 1fr) 96px 150px 190px 16px;
+  align-items: center;
+  column-gap: 16px;
+}
+.apps-header {
+  padding: 4px 12px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+.app-row {
+  min-height: 48px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  color: inherit;
+  text-decoration: none;
+}
+.app-row:hover {
+  background: var(--accent);
+}
+.app-row:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  background: var(--accent);
+}
+.app-row > [data-health] {
+  min-height: 28px;
+  align-self: center;
+}
+.app-main {
+  display: grid;
+  min-width: 0;
+}
+.app-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 550;
+}
+.app-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font:
+    11px ui-monospace,
+    monospace;
+}
+.app-history-dots {
+  display: flex;
+  gap: 3px;
+  padding-top: 3px;
+}
+.app-history-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--muted-foreground);
+}
+.app-history-dots i[data-health="ok"] {
+  background: var(--success, oklch(0.62 0.15 150));
+}
+.app-history-dots i[data-health="progress"] {
+  background: var(--primary);
+}
+.app-history-dots i[data-health="attention"] {
+  background: var(--destructive);
+}
+.app-kind {
+  justify-self: start;
+}
+.app-status [data-slot="badge"] {
+  background: transparent;
+  border: 0;
+  padding-left: 0;
+}
+.app-time {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.app-row .row-chevron {
+  width: 16px;
+  height: 16px;
+  opacity: 0;
+  color: var(--muted-foreground);
+}
+.app-row:hover .row-chevron,
+.app-row:focus-visible .row-chevron {
+  opacity: 1;
+}
+.apps-filter-note {
+  margin: 0;
+}
+@media (max-width: 600px) {
+  .apps-header,
+  .app-kind,
+  .app-row .row-chevron,
+  .app-main small,
+  .app-history-dots {
+    display: none;
+  }
+  .apps-toolbar .search-control {
+    width: 100%;
+    margin-left: 0;
+  }
+  .apps-chips button {
+    min-height: 44px;
+    padding-inline: 8px;
+  }
+  .apps-group-heading button {
+    min-height: 44px;
+  }
+  .apps-group [id^="apps-group-"] {
+    display: grid;
+    gap: 8px;
+  }
+  .app-row[data-kind] {
+    grid-template-columns: 4px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "stripe main status"
+      "stripe time time";
+    row-gap: 2px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .app-row > [data-health] {
+    grid-area: stripe;
+    align-self: stretch;
+  }
+  .app-main {
+    grid-area: main;
+  }
+  .app-status {
+    grid-area: status;
+  }
+  .app-time {
+    grid-area: time;
+  }
+}
+.app-note {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* Selection mode */
+.apps-header[data-selecting],
+.app-row[data-selecting] {
+  grid-template-columns: 20px 4px minmax(0, 1fr) 96px 150px 190px 16px;
+}
+.app-row[data-selecting] {
+  cursor: pointer;
+}
+.app-row[data-selecting] .row-chevron {
+  display: none;
+}
+.app-check {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.app-row[data-selecting]:has(input:checked) {
+  background: var(--accent);
+}
+.app-row[data-selecting]:has(input:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  background: var(--accent);
+}
+div.app-row[data-selecting] {
+  /* Dimmed without opacity so the text keeps its contrast. */
+  cursor: not-allowed;
+  background: var(--muted);
+}
+div.app-row[data-selecting] > [data-health] {
+  opacity: 0.4;
+}
+div.app-row[data-selecting] .app-main strong {
+  color: var(--muted-foreground);
+  font-weight: 450;
+}
+div.app-row[data-selecting]:hover {
+  background: var(--muted);
+}
+.apps-selection-bar {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.08);
+}
+.apps-selection-count {
+  margin-right: auto;
+  font-size: 13px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.apps-selection-select {
+  height: 32px;
+  max-width: 100%;
+  padding-inline: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  color: inherit;
+  font-size: 13px;
+}
+.apps-selection-select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.apps-selection-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--destructive);
+  font-size: 13px;
+}
+@media (max-width: 600px) {
+  .apps-selection-bar {
+    position: fixed;
+    top: auto;
+    inset-inline: 8px;
+    bottom: 8px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+  .applications-page:has(.apps-selection-bar) {
+    padding-bottom: 160px;
+  }
+  .apps-selection-count {
+    flex-basis: 100%;
+  }
+  .apps-selection-bar button {
+    flex: 1;
+  }
+  .apps-selection-bar button,
+  .apps-selection-select {
+    min-height: 44px;
+  }
+  .apps-selection-select {
+    flex: 1 1 100%;
+  }
+  .app-row[data-selecting][data-kind] {
+    grid-template-columns: 20px 4px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check stripe main status"
+      "check stripe time time";
+  }
+  .app-row[data-selecting] .app-check {
+    grid-area: check;
+  }
+  .app-row[data-selecting] .app-check {
+    width: 20px;
+    height: 20px;
+  }
+}

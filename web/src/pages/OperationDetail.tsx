@@ -15,13 +15,21 @@ import {
   Unplug,
 } from "lucide-react";
 import { api, terminal, type Operation } from "@/api/client";
-import { shortDate } from "@/lib/format";
-import { es as t } from "@/i18n/es";
+import { formatDateTime, formatTime } from "@/lib/format";
+import { errorMessage, operationError, stepName } from "@/i18n/errors";
+import { useI18n } from "@/i18n/context";
 import { PageTitle, Status, Loading, Failure } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-function Logs({ operation }: { operation: Operation }) {
+function Logs({
+  operation,
+  connection,
+}: {
+  operation: Operation;
+  connection?: { paused: boolean; toggle: () => void };
+}) {
+  const { t, locale } = useI18n();
   const [paused, setPaused] = useState(false);
   const [snapshot, setSnapshot] = useState(operation.logs);
   const [search, setSearch] = useState("");
@@ -85,7 +93,7 @@ function Logs({ operation }: { operation: Operation }) {
                 {String(line.sequence).padStart(2, "0")}
               </span>
               <time dateTime={line.time}>
-                {new Date(line.time).toLocaleTimeString("es")}
+                {formatTime(line.time, locale)}
               </time>
               <span>{line.message}</span>
             </li>
@@ -93,12 +101,22 @@ function Logs({ operation }: { operation: Operation }) {
         </ol>
         {!logs.length && <p>{t.noLogs}</p>}
       </div>
-      <p className="log-caption">{t.logBuffer}</p>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3.5 py-1.5">
+        <p className="text-xs text-muted-foreground">{t.logBuffer}</p>
+        {connection && (
+          <Button size="sm" variant="ghost" onClick={connection.toggle}>
+            <Unplug data-icon="inline-start" />
+            {connection.paused ? t.resumeConnection : t.pauseConnection}
+          </Button>
+        )}
+      </div>
     </section>
   );
 }
 export default function OperationDetail() {
-  const { id = "" } = useParams();
+  const { t, locale } = useI18n();
+  const params = useParams();
+  const id = params.opId ?? params.id ?? "";
   const cache = useQueryClient();
   const navigate = useNavigate();
   const operation = useQuery({
@@ -156,7 +174,7 @@ export default function OperationDetail() {
       setPausedConnection(false);
       setConnection("connecting");
       void cache.invalidateQueries({ queryKey: ["operations"] });
-      navigate(`/operations/${op.id}`);
+      navigate(`/apps/example/${encodeURIComponent(op.application_id)}/deployments/${op.id}`);
     },
   });
   if (operation.isPending) return <Loading />;
@@ -170,11 +188,12 @@ export default function OperationDetail() {
       </div>
     );
   const op = operation.data;
+  const appBase = `/apps/example/${encodeURIComponent(op.application_id)}`;
   return (
     <div className="page operation-page">
-      <Link className="back-link" to={`/applications/${op.application_id}`}>
+      <Link className="back-link" to={`${appBase}/deployments`}>
         <ArrowLeft />
-        {app.data?.name || t.backApp}
+        {t.tabDeployments}
       </Link>
       <PageTitle
         eyebrow={`${t.operation} / ${op.id.slice(0, 8)}`}
@@ -186,7 +205,7 @@ export default function OperationDetail() {
       />
       <div className="deployment-summary" aria-live="polite">
         <span>{t.statusDescription[op.status]}</span>
-        <time dateTime={op.created_at}>{shortDate(op.created_at)}</time>
+        <time dateTime={op.created_at}>{formatDateTime(op.created_at, locale)}</time>
       </div>
       {!done && (
         <div className="connection-bar">
@@ -198,20 +217,6 @@ export default function OperationDetail() {
                 ? t.connected
                 : t.reconnecting}
           </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setPausedConnection(!pausedConnection);
-              if (pausedConnection) {
-                setConnection("connecting");
-                void operation.refetch();
-              }
-            }}
-          >
-            <Unplug data-icon="inline-start" />
-            {pausedConnection ? t.resumeConnection : t.pauseConnection}
-          </Button>
         </div>
       )}
       {pausedConnection && !done && (
@@ -225,7 +230,7 @@ export default function OperationDetail() {
           <AlertCircle />
           <AlertTitle>{t.statusLabels[op.status]}</AlertTitle>
           <AlertDescription>
-            <p>{op.error}</p>
+            <p>{operationError(op, t)}</p>
             <p>{t.priorVersion}</p>
             <Button
               variant="outline"
@@ -235,7 +240,7 @@ export default function OperationDetail() {
               <RefreshCw data-icon="inline-start" />
               {t.retry}
             </Button>
-            {retry.isError && <p role="alert">{retry.error.message}</p>}
+            {retry.isError && <p role="alert">{errorMessage(retry.error, t)}</p>}
           </AlertDescription>
         </Alert>
       ) : null}
@@ -244,9 +249,9 @@ export default function OperationDetail() {
           <CheckCircle />
           <AlertTitle>{t.successTitle}</AlertTitle>
           <AlertDescription>
-            <code>{app.data?.url}</code>
-            <span>{t.nonNavigable}</span>
-            <Link to={`/applications/${op.application_id}`}>{t.backApp}</Link>
+            <p><strong>{t.simulatedURL}:</strong> <code>{app.data?.url || "—"}</code></p>
+            <p>{t.nonNavigable}</p>
+            <p><Link to={appBase}>{t.backApp}</Link></p>
           </AlertDescription>
         </Alert>
       )}
@@ -270,17 +275,20 @@ export default function OperationDetail() {
                       ? LoaderCircle
                       : Circle;
               return (
-                <li key={step.name} data-status={step.status}>
+                <li key={step.key || step.name} data-status={step.status}>
                   <span className="stage-icon">
                     <Icon aria-hidden="true" />
                   </span>
                   <span>
-                    <strong>{step.name}</strong>
+                    <strong>{stepName(step, t)}</strong>
                     <small>
-                      {step.message ||
-                        (step.status === "running"
-                          ? t.statusLabels.running
-                          : t.statusLabels.pending)}
+                      {step.status === "failed"
+                        ? operationError(op, t)
+                        : step.status === "succeeded"
+                          ? t.stepDone
+                          : step.status === "running"
+                            ? t.statusLabels.running
+                            : t.statusLabels.pending}
                     </small>
                   </span>
                   <span className="stage-number">
@@ -291,7 +299,23 @@ export default function OperationDetail() {
             })}
           </ol>
         </section>
-        <Logs operation={op} />
+        <Logs
+          operation={op}
+          connection={
+            done
+              ? undefined
+              : {
+                  paused: pausedConnection,
+                  toggle: () => {
+                    setPausedConnection(!pausedConnection);
+                    if (pausedConnection) {
+                      setConnection("connecting");
+                      void operation.refetch();
+                    }
+                  },
+                }
+          }
+        />
       </div>
     </div>
   );

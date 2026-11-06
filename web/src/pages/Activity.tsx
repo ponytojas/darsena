@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import { es as t } from "@/i18n/es";
+import { useCapabilities } from "@/lib/capabilities";
+import { useI18n } from "@/i18n/context";
 import {
   PageTitle,
   NewAppButton,
@@ -10,6 +11,8 @@ import {
   OperationRows,
 } from "@/components/shared";
 export default function ActivityPage() {
+  const { t } = useI18n();
+  const capabilities = useCapabilities();
   const operations = useQuery({
     queryKey: ["operations"],
     queryFn: api.operations,
@@ -40,7 +43,11 @@ export default function ActivityPage() {
         <OperationRows operations={operations.data} apps={apps.data} />
       ) : (
         <Blank
-          title={t.noActivity}
+          title={
+            capabilities.data?.worker.configured
+              ? t.noExampleDeployments
+              : t.noActivity
+          }
           description={t.noActivityDescription}
           action={<NewAppButton />}
         />

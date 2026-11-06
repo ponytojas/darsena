@@ -10,8 +10,11 @@ import {
   LoaderCircle,
   Plus,
 } from "lucide-react";
-import { shortDate } from "@/lib/format";
-import { es as t } from "@/i18n/es";
+import { formatDateTime } from "@/lib/format";
+import { useI18n } from "@/i18n/context";
+import { errorMessage } from "@/i18n/errors";
+import type { StatusKey } from "@/i18n/es";
+import type { Health } from "@/lib/status";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -25,7 +28,34 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Application, Operation } from "@/api/client";
 
-export function Status({ status }: { status: keyof typeof t.statusLabels }) {
+const healthStyle: Record<
+  Health,
+  { icon: typeof Check; text: string; bar: string }
+> = {
+  ok: { icon: Check, text: "text-success", bar: "bg-success" },
+  progress: { icon: LoaderCircle, text: "text-primary", bar: "bg-primary" },
+  attention: {
+    icon: AlertCircle,
+    text: "text-destructive",
+    bar: "bg-destructive",
+  },
+  idle: { icon: Circle, text: "text-muted-foreground", bar: "bg-border" },
+};
+/** Pass either a schema `status` (label derived) or a `health` with its own `label`. */
+export function Status(
+  props: { status: StatusKey } | { health: Health; label: string },
+) {
+  const { t } = useI18n();
+  if ("health" in props) {
+    const { icon: Icon, text } = healthStyle[props.health];
+    return (
+      <Badge variant="outline" data-health={props.health} className={text}>
+        <Icon aria-hidden="true" />
+        {props.label}
+      </Badge>
+    );
+  }
+  const { status } = props;
   const Icon =
     status === "healthy" || status === "succeeded"
       ? Check
@@ -41,8 +71,23 @@ export function Status({ status }: { status: keyof typeof t.statusLabels }) {
     </Badge>
   );
 }
+/** Decorative vertical stripe; the status text always accompanies it. */
+export function Berth({
+  health,
+  className = "",
+}: {
+  health: Health;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      data-health={health}
+      className={`block w-1 self-stretch rounded-full ${healthStyle[health].bar} ${className}`}
+    />
+  );
+}
 export function PageTitle({
-  eyebrow,
   title,
   description,
   action,
@@ -55,7 +100,6 @@ export function PageTitle({
   return (
     <div className="page-title">
       <div>
-        {eyebrow && <p className="eyebrow">{eyebrow}</p>}
         <h1 tabIndex={-1}>{title}</h1>
         {description && <p className="page-description">{description}</p>}
       </div>
@@ -64,8 +108,9 @@ export function PageTitle({
   );
 }
 export function NewAppButton() {
+  const { t } = useI18n();
   return (
-    <Button render={<Link to="/applications/new" />}>
+    <Button render={<Link to="/apps/new" />}>
       <Plus data-icon="inline-start" />
       {t.newApp}
     </Button>
@@ -78,12 +123,13 @@ export function Failure({
   error: Error | null;
   retry: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <Alert variant="destructive">
       <AlertCircle />
       <AlertTitle>{t.unavailable}</AlertTitle>
       <AlertDescription>
-        <p>{error?.message || t.connectionError}</p>
+        <p>{errorMessage(error, t)}</p>
         <Button variant="outline" onClick={retry}>
           {t.retry}
         </Button>
@@ -92,8 +138,9 @@ export function Failure({
   );
 }
 export function Loading() {
+  const { t } = useI18n();
   return (
-    <div className="loading-state" role="status" aria-label="Cargando">
+    <div className="loading-state" role="status" aria-label={t.loading}>
       <Skeleton className="h-8 w-48" />
       <Skeleton className="h-16 w-full" />
       <Skeleton className="h-16 w-full" />
@@ -122,42 +169,6 @@ export function Blank({
     </Empty>
   );
 }
-export function ApplicationRows({ apps }: { apps: Application[] }) {
-  return (
-    <div className="resource-list">
-      <div className="resource-header">
-        <span>{t.application}</span>
-        <span>{t.state}</span>
-        <span>{t.version}</span>
-        <span />
-      </div>
-      {apps.map((app) => (
-        <Link
-          key={app.id}
-          className="resource-row"
-          to={`/applications/${app.id}`}
-        >
-          <span className="resource-identity">
-            <span className="app-icon">
-              <Box aria-hidden="true" />
-            </span>
-            <span className="min-w-0">
-              <strong>{app.name}</strong>
-              <small>
-                {app.repository} <span aria-hidden="true">/</span> {app.branch}
-              </small>
-            </span>
-          </span>
-          <Status status={app.status} />
-          <span className="mono version">
-            {app.version ? `v${app.version}` : "—"}
-          </span>
-          <ChevronRight className="row-chevron" aria-hidden="true" />
-        </Link>
-      ))}
-    </div>
-  );
-}
 export function OperationRows({
   operations,
   apps = [],
@@ -165,10 +176,15 @@ export function OperationRows({
   operations: Operation[];
   apps?: Application[];
 }) {
+  const { t, locale } = useI18n();
   return (
     <div className="operation-list">
       {operations.map((op) => (
-        <Link className="operation-row" to={`/operations/${op.id}`} key={op.id}>
+        <Link
+          className="operation-row"
+          to={`/apps/example/${encodeURIComponent(op.application_id)}/deployments/${op.id}`}
+          key={op.id}
+        >
           <span className="operation-icon">
             <ArrowUpRight aria-hidden="true" />
           </span>
@@ -178,7 +194,7 @@ export function OperationRows({
                 t.demoDeploy}
             </strong>
             <small>
-              {shortDate(op.created_at)} ·{" "}
+              {formatDateTime(op.created_at, locale)} ·{" "}
               <span className="mono">{op.id.slice(0, 8)}</span>
             </small>
           </span>
